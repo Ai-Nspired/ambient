@@ -1,0 +1,24 @@
+{
+  "name": "ambient",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-01",
+  "services": [
+    // Workers may not fetch another workers.dev hostname (Cloudflare 1042),
+    // so mind is reached over a binding instead of a URL.
+    { "binding": "MIND", "service": "mind" },
+    // The dock is ARA's extension, so her pass runs here before anything is
+    // generated — over a binding, because a workers.dev Worker may not fetch
+    // another workers.dev hostname (Cloudflare 1042).
+    { "binding": "ARA", "service": "ara" }
+  ],
+  "kv_namespaces": [
+    // His preferences and intentions: read before every answer, written when he
+    // states a new one. This is Memoria, the same store the account curates.
+    { "binding": "PREFS", "id": "4a9bfbffb4d440cba86badc508e2045a" }
+  ],
+  "vars": {
+    "UPSTREAM": "https://mind.ai-n.workers.dev/api/assist",
+    "MODEL": "openai/gpt-4o-mini",
+    "ACCENT": "#4a9eff"
+  }
+}
