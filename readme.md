@@ -1,146 +1,286 @@
 Ambient Assistant (AA)
 
-The ambient assistant — a dock dropped into any page, with her pass over ARA first.
+«The ambient assistant — a dock dropped into any page, with her pass over ARA first.»
 
 1. What It Is
 
-The Ambient Assistant (AA) is a persistent, context-aware assistant that lives across applications and interfaces.
+The Ambient Assistant (AA) is a portable, context-aware interaction layer that brings ARA's reasoning capabilities into whatever application, system, or working environment the operator is using.
 
-It operates as an unobtrusive dock that can accompany the user while they work, observe authorized application context, understand the current task, and become conversationally available when needed.
+AA is designed to accompany the operator across applications rather than confine intelligence to a single interface. It understands the environment in which work is happening, maintains awareness of relevant context, and provides a continuous point of interaction between the operator, ARA, and the active application.
 
-AA is not another chatbot embedded in an application. It is the interaction layer between the operator and the larger reasoning system.
+AA is not simply a chatbot embedded in a page. It is an ambient presence capable of understanding, explaining, advising, and intervening when circumstances warrant it.
 
-It makes the system accessible from wherever the operator is working.
+Its purpose is to make intelligent assistance available wherever work happens.
 
-2. The Purpose
+2. Architectural Position
 
-Traditional applications require users to navigate predefined interfaces, menus, cards, and workflows.
+AA operates within a four-part relationship:
 
-AA introduces another way to interact.
+1. Operator: Establishes objectives, communicates intent, provides direction, corrects misunderstandings, and authorizes consequential actions.
+2. Ambient Assistant: Maintains contextual awareness, facilitates interaction, communicates ARA's reasoning, and identifies circumstances requiring attention.
+3. ARA: Provides the foundational reasoning authority, including intent interpretation, domain intelligence, confidence assessment, decision methodology, and learning.
+4. Host Application: Provides the actual working environment, application state, data, tools, and operational capabilities.
 
-The operator can ask questions, challenge an interpretation, correct a misunderstanding, request an explanation, or redirect the system without leaving the current application.
+These participants have distinct responsibilities.
 
-AA makes the system itself accessible through conversation.
+ARA governs the reasoning foundation. AA governs the ambient interaction experience. The host application retains authority over its own runtime, data, and operations. The operator retains direction and authorization.
 
-The objective is to reduce friction between human intent and system capability.
+AA does not replace the application, assume ownership of its runtime, or establish an independent reasoning authority.
 
-3. Architectural Position
+ARA-First Requirement
 
-AA operates above individual application interfaces but does not replace their underlying systems.
+Meaningful interactions pass through ARA before AA presents a reasoned response or initiates a consequential workflow.
 
-Its reasoning foundation is ARA (Autonomous Reasoning Architecture).
+ARA supplies the applicable intent interpretation, domain associations, reasoning methodology, and confidence discipline.
 
-The separation of responsibilities is fundamental:
+AA translates that reasoning into an interaction appropriate to the operator and the current environment.
 
-Component| Responsibility
-AA| Ambient presence, contextual awareness, conversational interaction
-ARA| Intent interpretation, domain intelligence, confidence, reasoning and decision methodology
-Applications| Their own interfaces, workflows, functions and operational responsibilities
-Memoria| Persistent experience, domain associations and preference records
-Knowledge sources| Evidence, reference material and established domain knowledge
+The application remains responsible for executing operations within its own authority and permissions.
 
-AA does not establish an independent reasoning authority. It passes meaningful interactions through ARA first.
+3. Application Awareness
 
-4. How It Works
+AA must understand the environment in which it is operating.
 
-4.1 Ambient Presence
+The active application is not merely a location where AA appears. It is a source of contextual information essential to understanding what the operator is doing.
 
-AA remains available across supported applications without demanding continuous attention.
+Within authorized access, AA should be able to recognize relevant information such as:
 
-It maintains awareness of authorized context, including:
+- The active application and interface.
+- The current page, workspace, document, card, or record.
+- The task or workflow in progress.
+- Relevant application state and available operations.
+- Dependencies, relationships, and potential conflicts.
+- Relevant history, prior decisions, and operator feedback.
+- The boundaries of the application's permissions and authority.
 
-- The active application or interface.
-- The current task or workflow.
-- The selected card, document, or interaction.
-- Relevant domain context.
-- Recent interaction history.
-- Available user feedback and preferences.
+Context must retain its provenance. AA must distinguish what it directly observes from what it infers, what the application reports from what has been independently verified, and what remains unknown.
 
-Awareness is contextual, not unrestricted surveillance. Access must be explicitly supported and authorized by the integration.
+Application awareness is not unrestricted access. Context acquisition must respect authorization, privacy, and the technical boundaries of the host environment.
 
-4.2 Contextual Understanding
+Mind as the Initial Application Context
 
-When the operator interacts with AA, it assembles the relevant context and passes the interaction through ARA.
+Mind is an initial and important example of the environment AA must understand.
 
-ARA evaluates:
+Mind provides a card-based AI interaction system with its own application architecture, truth layers, dictation, attachments, sessions, and relationships with other systems such as CODS and the Truth worker.
 
-- Explicit and implicit intent.
-- Applicable domains and their relationships.
-- Relevant preferences and historical interactions.
-- Available evidence.
-- Confidence and uncertainty.
-- The appropriate reasoning or decision process.
+When accompanying the operator inside Mind, AA should understand the relevant application context rather than treating each card or conversation as an isolated question.
 
-AA receives the resulting reasoning context and presents it conversationally.
+It should be able to help the operator understand what a card represents, why a result appeared, what information supports it, how it relates to other records, and whether something in the surrounding workflow requires attention.
 
-4.3 Conversational Intervention
+Mind is an initial application context, not the boundary of AA's capabilities.
 
-The operator can interact with AA directly:
+The architectural objective is portability: the same AA should be able to accompany the operator across different applications and environments without requiring a separate assistant or independent reasoning foundation for each one.
 
-- Ask why a card or recommendation appeared.
-- Request an explanation of a decision.
-- Correct an interpretation.
-- Challenge an assumption.
-- Provide additional context.
-- Redirect the current task.
-- Ask what the system has learned from previous interactions.
+4. Ambient Presence
 
-AA should make these interactions possible without requiring the operator to understand the underlying architecture.
+Ambient means unobtrusive, not passive.
 
-4.4 Feedback and Learning
+AA should remain available without demanding attention or interrupting ordinary work unnecessarily. It should not offer unsolicited instruction merely because it recognizes an opportunity to contribute.
 
-Corrections and feedback are returned through ARA's established learning process.
+However, when the context reveals something materially important, AA should not remain silent simply because the operator has not explicitly asked.
 
-A card selection, explicit correction, or confirmed preference may contribute to future domain associations and preference records.
+AA must distinguish between:
 
-Feedback is evidence, not automatic truth.
+- Information that is available but irrelevant.
+- Information that may be useful to the current task.
+- Conditions that could affect the outcome.
+- Problems that could cause failure, loss, or unintended consequences.
+- Circumstances requiring immediate attention.
 
-Repeated behavior does not establish correctness, and inferred preferences must remain distinguishable from confirmed preferences.
+The objective is contextual assistance, not constant commentary.
 
-5. The Interaction Cycle
+5. Duty of Contextual Intervention
 
-The general interaction follows this sequence:
+AA has a duty to surface materially relevant information when the surrounding context indicates that silence could allow an avoidable problem or significant misunderstanding to occur.
 
-1. Observe: AA receives authorized context from the active application.
-2. Receive: The operator asks a question, gives an instruction, or provides feedback.
-3. Interpret: ARA evaluates intent, context, domains, and confidence.
-4. Reason: ARA determines the appropriate reasoning or decision process.
-5. Respond: AA presents the result through the ambient interface.
-6. Intervene: The operator can question, correct, or redirect the result.
-7. Learn: Confirmed feedback enters ARA's controlled learning process.
+This is a core architectural responsibility, not merely a notification feature.
 
-The cycle is continuous, but AA remains unobtrusive unless interaction is useful or requested.
+AA should proactively identify and communicate:
 
-6. The Fourth Wall
+- Impending operational failures.
+- Contradictions between instructions, records, and actual system state.
+- Missing dependencies or prerequisites.
+- Potential data loss, overwrites, or unintended changes.
+- Security, authorization, and configuration concerns.
+- Incorrect assumptions affecting the current task.
+- Relevant consequences that may not be apparent to the operator.
+- Important relationships or information that materially change the analysis.
 
-AA establishes a direct conversational connection between the operator and the system.
+This responsibility extends beyond the narrow boundaries of the immediate question when broader system context reveals a material concern.
 
-The operator is no longer limited to interacting with predetermined controls.
+For example, while assisting with a code change, AA may recognize that the proposed change conflicts with a shared production dependency. That conflict matters even if the operator's immediate question concerns only one file.
 
-The system can explain what it understood, expose uncertainty, accept corrections, and make its reasoning process accessible.
+Intervention Hierarchy
 
-The operator remains the authority over objectives, permissions, and consequential actions.
+AA should calibrate its intervention to the significance and urgency of the situation.
 
-7. Operating Principles
+Level| Classification| Behavior
+0| Ambient| Observe authorized context and remain unobtrusive.
+1| Informational| Surface relevant information that may improve understanding.
+2| Advisory| Identify risks, conflicts, missing dependencies, or likely consequences and recommend a response.
+3| Critical| Interrupt when a material and imminent problem warrants immediate attention.
+4| Emergency| Invoke an applicable authorized safety boundary or halt mechanism when its conditions are met.
 
-- ARA is the reasoning authority.
-- AA is the ambient interaction layer.
-- Applications retain their own operational responsibilities.
-- Context access must be authorized and scoped.
-- Original input and provenance must be preserved.
-- Inference must never be silently represented as confirmation.
-- User feedback must not automatically become established truth.
-- Ambient awareness does not imply authorization.
-- Consequential actions require appropriate authorization.
-- Uncertainty must remain visible.
-- The operator can question, correct, and redirect the system.
+Escalation must be proportional to risk and supported by evidence.
 
-8. Architectural Objective
+AA should consider relevance, potential impact, imminence, confidence, actionability, and the cost of interruption. These are decision factors, not arbitrary numerical thresholds.
 
-AA is intended to make intelligence available wherever the operator works.
+When uncertainty is material, AA must communicate it. It may recommend pausing an operation for verification without presenting an unverified concern as established fact.
 
-It should not require the operator to enter a separate application, reconstruct context, or repeatedly explain what they are doing.
+Explanation of Intervention
 
-The interface is ambient. The reasoning is centralized. The operator remains in control.
+An intervention should make clear:
 
-AA makes the system approachable. ARA makes its reasoning accountable.
+1. What triggered the intervention.
+2. What AA observed.
+3. What evidence supports the concern.
+4. What remains uncertain.
+5. What consequence may follow if the issue is ignored.
+6. What response AA recommends.
+
+The operator should be able to understand why AA interrupted rather than being expected to accept an unexplained warning.
+
+6. Conversational Interaction
+
+AA provides a direct conversational relationship between the operator and the systems being used.
+
+The operator should be able to:
+
+- Ask questions about the active application or task.
+- Request explanations of system behavior.
+- Ask why a recommendation, result, or card appeared.
+- Challenge an interpretation or decision.
+- Correct misunderstood intent or context.
+- Redirect the current analysis.
+- Explore related domains and underlying principles.
+- Ask what evidence supports a conclusion.
+- Ask what AA has learned and why.
+
+This creates an interactive boundary between the operator and the system: the operator is no longer limited to the controls and explanations that an application happens to expose.
+
+AA should make the system more understandable and more accountable to the person operating it.
+
+The Fourth Wall
+
+AA breaks the fourth wall between the operator and the application.
+
+Instead of requiring the operator to understand every internal mechanism independently, AA provides a conversational means of examining what the application is doing, why it is doing it, and how its behavior relates to the operator's objectives.
+
+This does not mean exposing information the operator is not authorized to access. It means making available system context understandable, inspectable, and open to correction within applicable permissions.
+
+7. Domain and Knowledge Awareness
+
+AA must not be limited to the vocabulary or capabilities of the application in which it appears.
+
+Through ARA, it can engage with foundational, composite, and specialized domains.
+
+Examples include:
+
+- Software development, coding, debugging, and systems architecture.
+- Infrastructure, networking, automation, and operational security.
+- Mathematics, logic, physics, and universe fundamentals.
+- Research, scientific reasoning, and evidence evaluation.
+- Legal analysis, procedural reasoning, and document examination.
+- Engineering, electronics, automotive systems, and embedded technologies.
+- Interdisciplinary problems requiring several domains simultaneously.
+
+The current application provides context; it does not dictate the limits of the reasoning available.
+
+ARA identifies applicable domains, interprets intent, selects appropriate reasoning methodologies, and evaluates confidence. AA makes those capabilities accessible within the operator's current environment.
+
+Domain classifications and preferences must remain evidence-based. A demonstrated interest is not automatically a confirmed preference, and a preference is not proof of factual correctness.
+
+8. Feedback and Learning
+
+AA provides a feedback channel through which the operator can improve the system's understanding.
+
+Feedback may include:
+
+- Explicit corrections.
+- Confirmation or rejection of an interpretation.
+- Clarification of intended objectives.
+- Domain relevance feedback.
+- Preference signals.
+- Evaluation of recommendations and outcomes.
+- Identification of recurring misunderstandings.
+
+Feedback is evidence for ARA to evaluate, not automatic truth.
+
+ARA remains responsible for determining how feedback affects intent interpretation, domain associations, preference confidence, decision confidence, and cumulative learning.
+
+The system must preserve the distinction between:
+
+- What the operator explicitly stated.
+- What AA or ARA inferred.
+- What the operator subsequently confirmed or corrected.
+- What the system independently verified.
+- What remains unresolved.
+
+Repeated interaction alone does not establish correctness. A click, selection, or preference signal must not silently become a factual assertion or authorization.
+
+Learning must be traceable, evidence-supported, and consistent with the applicable memory and truth-management boundaries.
+
+9. Authority, Authorization, and Safety
+
+Ambient awareness does not confer authority.
+
+AA may recognize a problem, explain its consequences, recommend a course of action, and request operator attention. It must not treat observation, inferred intent, or conversational context as permission to perform consequential operations.
+
+The following boundaries apply:
+
+- The operator establishes direction and grants authorization.
+- ARA evaluates intent and supplies the reasoning foundation.
+- AA communicates, advises, and intervenes.
+- The host application performs operations under its own permissions and authority.
+- Applicable safety constraints and halt mechanisms remain enforceable.
+
+AA must not independently redefine ARA's foundational principles, modify master truth, bypass application authorization, or assume control of another system's runtime.
+
+When an intervention requires an operational response, the responsible application and authorization mechanism must govern execution.
+
+10. Operational Interaction Cycle
+
+The intended interaction cycle is:
+
+1. Presence: AA is available within the active environment.
+2. Context acquisition: AA obtains authorized information about the application, task, and relevant system state.
+3. Interpretation: ARA evaluates intent, domain relevance, and applicable context.
+4. Reasoning: ARA supplies the appropriate decision methodology and confidence assessment.
+5. Interaction: AA communicates the result, explanation, or recommendation.
+6. Intervention: AA proactively surfaces material concerns when warranted.
+7. Operator response: The operator may accept, reject, question, correct, or redirect.
+8. Authorized action: The responsible application executes permitted operations.
+9. Reflection: Results and corrections become available for verification and learning through ARA.
+
+Not every interaction requires every step. The cycle describes the governing relationship, not a mandatory sequence of separate operations.
+
+11. Integration Principles
+
+AA should be portable across applications without duplicating foundational reasoning or creating competing authorities.
+
+Integration should favor:
+
+- A consistent AA interaction model across environments.
+- Application-specific context adapters.
+- Explicitly authorized context acquisition.
+- ARA as the shared reasoning foundation.
+- Clear separation between reasoning, presentation, and execution.
+- Preservation of application ownership and operational boundaries.
+- Traceable context, evidence, and feedback.
+- Minimal duplication of intelligence and persistent state.
+
+An application should not need to recreate ARA to make AA useful. It should expose the context and capabilities that it is authorized to provide through a defined integration boundary.
+
+Implementation must respect existing infrastructure and ownership. New Workers, services, storage, dependencies, or permissions must not be introduced merely for architectural convenience.
+
+12. Architectural Objective
+
+The objective is an assistant that can accompany the operator wherever work happens and remain useful across changing applications, tasks, and domains.
+
+Whether the operator is examining a legal record, writing code, diagnosing infrastructure, researching a scientific question, or trying to understand a fundamental principle of the universe, AA should be able to connect the immediate context with the broader reasoning capabilities of ARA.
+
+It should understand enough about the current environment to recognize what matters, explain what is happening, identify what may go wrong, and help the operator make better-informed decisions.
+
+It should remain unobtrusive when nothing requires its attention and speak up when the circumstances justify it.
+
+AA is the ambient interface. ARA is the reasoning authority. The application is the working environment. The operator remains in control.
