@@ -66,6 +66,16 @@ var CLIENT = String.raw`(function () {
     '.amb-card{border:1px solid var(--amb-accent);border-radius:10px;background:#141821;color:#e6e9ef;padding:12px;box-shadow:0 0 0 1px rgba(74,158,255,.18)}',
     '.amb-card .amb-q{font-size:11px;opacity:.55;margin-bottom:6px}',
     '.amb-card .amb-a{white-space:pre-wrap}',
+    '.amb-alert{display:flex;flex-direction:column;gap:4px;border-left:3px solid var(--amb-accent);border-radius:8px;background:#141821;padding:8px 10px;color:#e6e9ef}',
+    '.amb-alert.l2{border-left-color:#e0a800}',
+    '.amb-alert.l3{border-left-color:#e8622c;box-shadow:0 0 0 1px rgba(232,98,44,.35)}',
+    '.amb-alert.l4{border-left-color:#d32f2f;box-shadow:0 0 0 1px rgba(211,47,47,.45)}',
+    '.amb-alert .amb-lvl{font-size:9px;letter-spacing:.12em;text-transform:uppercase;opacity:.6}',
+    '.amb-alert .amb-part{font-size:11px;line-height:1.45}',
+    '.amb-alert .amb-part b{font-weight:600;opacity:.65;letter-spacing:.04em;text-transform:uppercase;font-size:9px;margin-right:5px}',
+    '.amb-alert .amb-x{align-self:flex-end;background:none;border:none;color:#9aa4b2;font-size:11px;cursor:pointer;padding:0}',
+    '.amb-turn.err{border-left-color:#d32f2f;color:#ffd7d7}',
+    '.amb-round.alert{background:#d32f2f;border-color:#d32f2f;color:#fff}',
     '@media (max-width:520px){.amb-panel{width:92vw}}'
   ].join('\n');
 
@@ -118,6 +128,14 @@ var CLIENT = String.raw`(function () {
   voiceBtn.style.cssText = 'width:auto;height:26px;border-radius:8px;padding:0 8px;font-size:10px';
   var head = dock.querySelector('.amb-head');
   if (head && head.lastElementChild) head.insertBefore(voiceBtn, head.lastElementChild);
+  // Whether she may speak up on her own. Ambient, not chatty.
+  var watchBtn = document.createElement('button');
+  watchBtn.className = 'amb-round';
+  watchBtn.setAttribute('data-act', 'watch');
+  watchBtn.title = 'Watch the page';
+  watchBtn.textContent = watchOn() ? 'watch on' : 'watch off';
+  watchBtn.style.cssText = 'width:auto;height:26px;border-radius:8px;padding:0 8px;font-size:10px';
+  if (head && head.lastElementChild) head.insertBefore(watchBtn, head.lastElementChild);
 
   function open(force) {
     var on = force === undefined ? !panel.classList.contains('open') : force;
@@ -210,14 +228,20 @@ var CLIENT = String.raw`(function () {
         body: JSON.stringify({ thread: thread.slice(0, -1), files: files, context: document.title || '' })
       });
       var body = await res.json().catch(function () { return null; });
+      var failed = Boolean(body && body.error);
       var text = (body && body.text) || (body && body.error && body.error.message) || ('No answer (' + res.status + ').');
-      if (body && body.decision && body.decision.id !== undefined && body.decision.id !== null) attachVerdict(pending, body.decision.id);
+      if (!failed && body && body.decision && body.decision.id !== undefined && body.decision.id !== null) attachVerdict(pending, body.decision.id);
       pending.textContent = text;
-      speak(text);
+      // A failure is shown as a failure, never spoken as an answer.
+      if (failed) pending.className = 'amb-turn bot err';
+      else speak(text);
+      if (!failed && body && body.intervention) showIntervention(body.intervention);
       thread[thread.length - 1] = { role: 'assistant', content: text };
       if (files.length) { files = []; renderFiles(); }
-      window.dispatchEvent(new CustomEvent('ambient:card', { detail: { question: said, answer: text, venue: 'ambient' } }));
-      if (render) drawCard(said, text);
+      if (!failed) {
+        window.dispatchEvent(new CustomEvent('ambient:card', { detail: { question: said, answer: text, venue: 'ambient' } }));
+        if (render) drawCard(said, text);
+      }
     } catch (err) {
       pending.textContent = 'Ambient unavailable: ' + err.message;
     }
@@ -297,6 +321,82 @@ var CLIENT = String.raw`(function () {
     host.appendChild(card);
   }
 
+  // Watching: she may speak without being asked, but only when the page says
+  // something changed, only as often as that earns, and only at the level her
+  // own decision gives it. A pass that fails stays quiet.
+  function watchOn() { try { return localStorage.getItem('amb.watch') !== 'off'; } catch (err) { return true; } }
+  function setWatch(on) { try { localStorage.setItem('amb.watch', on ? 'on' : 'off'); } catch (err) {} }
+  var passed = 0;
+  async function witness(observation, force) {
+    if (!watchOn()) return;
+    var now = Date.now();
+    if (!force && now - passed < 20000) return;
+    passed = now;
+    try {
+      var res = await fetch(new URL('/api/witness', endpoint).toString(), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ thread: thread.slice(-6), context: document.title || '', observation: String(observation || '').slice(0, 1200) })
+      });
+      if (!res.ok) return;
+      var body = await res.json().catch(function () { return null; });
+      if (!body || !body.intervention) return;
+      showIntervention(body.intervention);
+    } catch (err) {}
+  }
+
+  // The six things an intervention has to make clear, and nothing it does not.
+  function showIntervention(iv) {
+    if (!iv || !(iv.level >= 1)) return;
+    var box = document.createElement('div');
+    box.className = 'amb-alert l' + iv.level;
+    var lvl = document.createElement('div');
+    lvl.className = 'amb-lvl';
+    lvl.textContent = 'level ' + iv.level + ' / ' + (iv.name || 'informational');
+    box.appendChild(lvl);
+    var parts = [
+      ['trigger', iv.trigger],
+      ['observed', iv.observed],
+      ['evidence', iv.evidence],
+      ['uncertain', iv.uncertain],
+      ['if ignored', iv.consequence],
+      ['recommended', iv.recommend]
+    ];
+    parts.forEach(function (pair) {
+      if (!pair[1]) return;
+      var row = document.createElement('div');
+      row.className = 'amb-part';
+      var label = document.createElement('b');
+      label.textContent = pair[0];
+      row.appendChild(label);
+      row.appendChild(document.createTextNode(String(pair[1])));
+      box.appendChild(row);
+    });
+    var dismiss = document.createElement('button');
+    dismiss.className = 'amb-x';
+    dismiss.textContent = 'dismiss';
+    dismiss.onclick = function () { box.remove(); };
+    box.appendChild(dismiss);
+    threadBox.appendChild(box);
+    threadBox.scrollTop = threadBox.scrollHeight;
+    // 3 interrupts; 4 marks the dock until the application's own halt is involved.
+    if (iv.level >= 3) open(true);
+    if (iv.level >= 4) openBtn.classList.add('alert');
+  }
+
+  var titled = document.title;
+  function observeTitle() {
+    if (document.title === titled) return;
+    titled = document.title;
+    witness('The page changed to: ' + titled);
+  }
+  setInterval(observeTitle, 5000);
+  // A host that knows what changed can say so directly.
+  window.addEventListener('ambient:witness', function (event) {
+    var detail = event && event.detail || {};
+    witness(String(detail.observation || detail.note || ''), true);
+  });
+
   dock.addEventListener('click', function (event) {
     var btn = event.target.closest('[data-act]');
     if (!btn) return;
@@ -309,6 +409,10 @@ var CLIENT = String.raw`(function () {
       setVoice(!voiceOn());
       btn.textContent = voiceOn() ? 'voice on' : 'voice off';
       if (!voiceOn()) { try { window.speechSynthesis.cancel(); spoken = null; } catch (err) {} }
+    }
+    else if (act === 'watch') {
+      setWatch(!watchOn());
+      btn.textContent = watchOn() ? 'watch on' : 'watch off';
     }
   });
 
@@ -422,6 +526,48 @@ function cleanFiles(raw) {
   })).filter((file) => file.text || file.image);
 }
 __name(cleanFiles, "cleanFiles");
+var INTERVENTION = { 1: "informational", 2: "advisory", 3: "critical", 4: "emergency" };
+function line(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 800);
+}
+__name(line, "line");
+function interventionOf(decision, override) {
+  if (!decision) return null;
+  const source = decision.intervention && typeof decision.intervention === "object" ? decision.intervention : decision;
+  const level = Math.round(Number(override ?? source.level ?? decision.level ?? 0));
+  // Level 0 is ambient: observe, say nothing. Anything below 1 stays silent.
+  if (!Number.isFinite(level) || level < 1) return null;
+  const capped = Math.min(4, level);
+  return {
+    level: capped,
+    name: INTERVENTION[capped],
+    id: decision.id ?? null,
+    trigger: line(source.trigger),
+    observed: line(source.observed) || line(decision.text),
+    evidence: line(source.evidence),
+    uncertain: line(source.uncertain),
+    consequence: line(source.consequence),
+    recommend: line(source.recommend)
+  };
+}
+__name(interventionOf, "interventionOf");
+function observedIntervention(decision) {
+  if (!decision) return null;
+  const stated = decision.level ?? (decision.intervention && typeof decision.intervention === "object" ? decision.intervention.level : null);
+  // Only an explicit 0 means she looked and chose silence. No level at all, a
+  // level nobody can read, and words of her own are all not that: if she wrote
+  // something it is at least worth saying, so it lands quietly as informational
+  // rather than disappearing.
+  const at = stated === null || stated === undefined ? "" : String(stated).trim();
+  const explicitSilence = at !== "" && Number(at) === 0;
+  const named = interventionOf(decision);
+  if (named) return named;
+  if (explicitSilence || !line(decision.text)) return null;
+  // The override wins over whatever unreadable level she left behind, and her
+  // own six parts still come through as written.
+  return interventionOf(decision, 1);
+}
+__name(observedIntervention, "observedIntervention");
 async function reportOutcome(env, id, returned) {
   if (id === null || id === void 0) return "no_decision_id";
   if (!env?.ARA || typeof env.ARA.fetch !== "function") return "ara_unbound";
@@ -458,23 +604,60 @@ async function handleAmbient(request, env) {
   const documents = files.filter((file) => file.text).map((file) => `Attached document "${file.name}":
 ${file.text}`).join("\n\n");
   const prefs = await loadPrefs(env);
-  const decision = await decideFirst(env, ask, { thread, prefs, files, looking: context });
-  if (decision && decision.clarify) {
-    const asked = (decision.clarify.questions || [])[0] || null;
+  const first = await decideFirst(env, ask, { thread, prefs, files, looking: context });
+  // ARA is the reasoning authority. Without her there is no answer to give, and
+  // the dock says so instead of quietly answering from somewhere else.
+  if (!first.ok) {
     return json({
-      text: decision.text || asked && asked.q || "",
+      error: {
+        code: "ara_unavailable",
+        message: "ARA did not answer (" + first.reason + "), so the ambient assistant has nothing of hers to say.",
+        detail: first.reason
+      },
+      decision: null,
+      via: "ara"
+    }, 503);
+  }
+  const decision = first.decision;
+  const face = { id: decision.id ?? null, move: decision.move, domain: decision.domain, target: decision.target, cost: decision.cost };
+  const intervention = interventionOf(decision);
+  if (decision.clarify) {
+    const asked = (decision.clarify.questions || [])[0] || null;
+    const said = decision.text || asked && asked.q || "";
+    return json({
+      text: said,
       // The decision was made; this is what came of it, so she hears it.
-      outcome: await reportOutcome(env, decision.id ?? null, decision.text || asked && asked.q || ""),
+      outcome: await reportOutcome(env, face.id, said),
       clarify: decision.clarify,
-      decision: { id: decision.id, move: decision.move, domain: decision.domain, target: decision.target },
+      decision: face,
+      intervention,
       via: "ara"
     });
   }
-  const face = decision ? { id: decision.id, move: decision.move, domain: decision.domain, target: decision.target, cost: decision.cost } : null;
+  // Her own answer is the answer. The model speaks only when she chose not to.
+  if (decision.text) {
+    const hers = extractPrefs(decision.text);
+    for (const preference of hers.learned) {
+      if (learned.some((entry) => entry.text === preference)) continue;
+      const saved = await savePref(env, preference);
+      if (saved) learned.push(saved);
+    }
+    return json({
+      text: hers.text,
+      via: "ara",
+      learned,
+      decision: face,
+      intervention,
+      outcome: await reportOutcome(env, face.id, hers.text)
+    });
+  }
   const standing = "When he states a standing preference rather than a one-off instruction, follow it and end your reply with a single line: PREF: <the preference, one sentence>. Do that for standing preferences only, never for a one-off ask. A preference is a rule about how he wants things done, not a fact about the work.";
+  // She decided and did not write the words, so the words follow her decision.
+  const frame = "ARA has already decided this and the decision is binding. You are her voice, not a second opinion: answer inside her decision, never around it, and do not re-decide what she settled.\nHer decision: " + JSON.stringify({ move: face.move, domain: face.domain, target: face.target, cost: face.cost }) + " (id " + String(face.id ?? "none") + ").";
   const messages = [{ role: "system", content: BRIEF + prefsBlock(prefs) + "\n\n" + standing + (context ? `
 
 He is looking at: ${context}` : "") }, ...thread];
+  messages.splice(1, 0, { role: "system", content: frame });
   if (documents) {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       if (messages[i].role !== "user") continue;
@@ -506,14 +689,14 @@ ${documents}` };
         const saved = await savePref(env, preference);
         if (saved) learned.push(saved);
       }
-      return json({ text: parsed2.text, via: "openrouter", learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
+      return json({ text: parsed2.text, via: "ara+model", learned, decision: face, intervention, outcome: await reportOutcome(env, face.id, parsed2.text) });
     } catch (err) {
       return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
     }
   }
   const payload = JSON.stringify({
     thread,
-    context: (context + prefsBlock(prefs)).slice(0, 12e3),
+    context: [frame, context + prefsBlock(prefs)].join(" ").slice(0, 12e3),
     files: files.map((file) => ({ name: file.name, url: "", contentType: file.image ? "image/*" : "text/plain", text: file.text, image: false }))
   });
   let forwarded;
@@ -539,12 +722,12 @@ ${documents}` };
     const saved = await savePref(env, preference);
     if (saved) learned.push(saved);
   }
-  return json({ text: parsed.text, via: "upstream", learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed.text) });
+  return json({ text: parsed.text, via: "ara+model", learned, decision: face, intervention, outcome: await reportOutcome(env, face.id, parsed.text) });
 }
 __name(handleAmbient, "handleAmbient");
-async function decideFirst(env, ask, { thread = [], prefs = [], files = [], looking = "" } = {}) {
+async function decideFirst(env, ask, { thread = [], prefs = [], files = [], looking = "", mode = "ask" } = {}) {
   const binding = env && env.ARA && typeof env.ARA.fetch === "function" ? env.ARA : null;
-  if (!binding) return null;
+  if (!binding) return { ok: false, reason: "ara_unbound" };
   const context = {
     thread: thread.slice(-6).map((message) => `${message.role}: ${String(message.content || "").slice(0, 300)}`).join("\n"),
     // What he is looking at, under the key Aura actually renders. `renderState`
@@ -552,6 +735,8 @@ async function decideFirst(env, ask, { thread = [], prefs = [], files = [], look
     // else is dropped, which is why a `looking` field changed nothing at all.
     artifact: String(looking || "").slice(0, 4000),
     prefs: prefsBlock(prefs),
+    // A witness pass asks whether a change deserves her attention, not for an answer.
+    mode,
     cards: files.filter((file) => file.name).map((file, index) => ({
       id: `file:${index}`,
       label: `Attached ${file.image ? "image" : "document"}: ${file.name}`
@@ -565,20 +750,37 @@ async function decideFirst(env, ask, { thread = [], prefs = [], files = [], look
         body: JSON.stringify({ text: ask, domain: "general", surface: "ambient", context })
       })
     );
-    if (!response.ok) return null;
+    if (!response.ok) return { ok: false, reason: "ara_" + response.status };
     const data = await response.json().catch(() => null);
-    if (!data) return null;
+    if (!data) return { ok: false, reason: "ara_unreadable" };
     return {
-      id: data.id ?? null,
-      move: data.move ?? null,
-      domain: data.domain ?? null,
-      target: data.target ?? null,
-      cost: data.cost ?? null,
-      text: data.text ?? null,
-      clarify: data.clarify ?? null
+      ok: true,
+      decision: {
+        id: data.id ?? null,
+        move: data.move ?? null,
+        domain: data.domain ?? null,
+        target: data.target ?? null,
+        cost: data.cost ?? null,
+        text: data.text ?? null,
+        clarify: data.clarify ?? null,
+        // What she thinks this deserves, and the six things an intervention has
+        // to make clear. Absent or 0 means observe and stay silent.
+        // Either shape: nested, or the level and its six parts sitting flat on
+        // the decision itself. Both land the same way in the dock.
+        intervention: data.intervention ?? (data.level ? {
+          level: data.level,
+          trigger: data.trigger,
+          observed: data.observed,
+          evidence: data.evidence,
+          uncertain: data.uncertain,
+          consequence: data.consequence,
+          recommend: data.recommend
+        } : null),
+        level: data.level ?? null
+      }
     };
   } catch {
-    return null;
+    return { ok: false, reason: "ara_unreachable" };
   }
 }
 __name(decideFirst, "decideFirst");
@@ -599,6 +801,7 @@ var worker_default = {
         status: "ok",
         worker: "ambient",
         direct: Boolean(env?.OPENROUTER_API_KEY),
+        ara: Boolean(env?.ARA),
         upstream: env?.UPSTREAM || null,
         memory: Boolean(env?.PREFS)
       });
@@ -656,6 +859,39 @@ var worker_default = {
       } catch (err) {
         return json({ error: { code: "feedback_failed", message: String(err?.message || err) } }, 502);
       }
+    }
+    if (url.pathname === "/api/witness" && request.method === "POST") {
+      let pass;
+      try {
+        pass = await request.json();
+      } catch {
+        return json({ error: { code: "invalid_json", message: "Invalid JSON body" } }, 400);
+      }
+      const context = String(pass?.context || "").slice(0, 2e3);
+      const observation = String(pass?.observation || "").slice(0, 2e3);
+      const thread = Array.isArray(pass?.thread) ? pass.thread.filter((m) => m && typeof m.content === "string" && (m.role === "user" || m.role === "assistant")).map((m) => ({ role: m.role, content: m.content.slice(0, 2e3) })).slice(-6) : [];
+      const prefs = await loadPrefs(env);
+      const seen = await decideFirst(env, observation || context || "The operator moved to a different part of the application.", { thread, prefs, looking: context, mode: "witness" });
+      if (!seen.ok) {
+        // A background pass stays quiet in the dock; /api/ambient carries the alarm.
+        const quiet = json({ level: 0, silent: true, intervention: null, via: "ara", reason: seen.reason }, 503);
+        quiet.headers.set("access-control-allow-origin", "*");
+        return quiet;
+      }
+      const decision = seen.decision;
+      // A pass with words and no level is still a pass worth showing.
+      const intervention = observedIntervention(decision);
+      const response = json({
+        level: intervention ? intervention.level : 0,
+        silent: !intervention,
+        intervention,
+        text: decision.text || null,
+        decision: { id: decision.id ?? null, move: decision.move ?? null, domain: decision.domain ?? null, target: decision.target ?? null },
+        via: "ara",
+        outcome: intervention ? await reportOutcome(env, decision.id ?? null, intervention.observed || intervention.trigger) : null
+      });
+      response.headers.set("access-control-allow-origin", "*");
+      return response;
     }
     if (url.pathname === "/api/ambient" && request.method === "POST") {
       const response = await handleAmbient(request, env);
