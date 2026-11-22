@@ -231,25 +231,27 @@ var CLIENT = String.raw`(function () {
       });
       var body = await res.json().catch(function () { return null; });
       var failed = Boolean(body && body.error);
-      // Nothing came back: no answer and no clarify. That is not an answer with a
-      // status code in it — it is the decision and the reason, and nothing spoken.
+      // No answer and no clarify came back. Nothing of ours goes in its place: the
+      // bubble comes off and the ask stands unanswered.
       var bare = !failed && body && body.no_answer && !body.text;
-      var text = bare
-        ? 'move: ' + ((body.decision && body.decision.move) || '—') + ' · ' + body.no_answer.reason
-        : (body && body.text) || (body && body.error && body.error.message) || ('No answer (' + res.status + ').');
-      if (!failed && body && body.decision && body.decision.id !== undefined && body.decision.id !== null) attachVerdict(pending, body.decision.id);
-      pending.textContent = text;
-      // A failure is shown as a failure, never spoken as an answer.
-      if (failed) pending.className = 'amb-turn bot err';
-      else if (bare) pending.className = 'amb-turn bot quiet';
-      else speak(text);
-      if (!failed && body && body.intervention) showIntervention(body.intervention);
-      if (!failed && body && body.clarify) offerChoices(pending, body.clarify, body.decision && body.decision.id);
-      thread[thread.length - 1] = { role: 'assistant', content: text };
-      if (files.length) { files = []; renderFiles(); }
-      if (!failed) {
-        window.dispatchEvent(new CustomEvent('ambient:card', { detail: { question: said, answer: text, venue: 'ambient' } }));
-        if (render) drawCard(said, text);
+      if (bare) {
+        thread.pop();
+        pending.remove();
+      } else {
+        var text = (body && body.text) || (body && body.error && body.error.message) || ('No answer (' + res.status + ').');
+        if (!failed && body && body.decision && body.decision.id !== undefined && body.decision.id !== null) attachVerdict(pending, body.decision.id);
+        pending.textContent = text;
+        // A failure is shown as a failure, never spoken as an answer.
+        if (failed) pending.className = 'amb-turn bot err';
+        else speak(text);
+        if (!failed && body && body.intervention) showIntervention(body.intervention);
+        if (!failed && body && body.clarify) offerChoices(pending, body.clarify, body.decision && body.decision.id);
+        thread[thread.length - 1] = { role: 'assistant', content: text };
+        if (files.length) { files = []; renderFiles(); }
+        if (!failed) {
+          window.dispatchEvent(new CustomEvent('ambient:card', { detail: { question: said, answer: text, venue: 'ambient' } }));
+          if (render) drawCard(said, text);
+        }
       }
     } catch (err) {
       pending.textContent = 'Ambient unavailable: ' + err.message;
