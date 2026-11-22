@@ -327,10 +327,29 @@ var CLIENT = String.raw`(function () {
   function watchOn() { try { return localStorage.getItem('amb.watch') !== 'off'; } catch (err) { return true; } }
   function setWatch(on) { try { localStorage.setItem('amb.watch', on ? 'on' : 'off'); } catch (err) {} }
   var passed = 0;
+  var held = null;   // the change the floor would not let through yet
+  var pending = 0;   // the timer that will let it through
+  function release() {
+    var observation = held;
+    held = null;
+    pending = 0;
+    if (observation !== null && observation !== undefined) witness(observation, true);
+  }
   async function witness(observation, force) {
     if (!watchOn()) return;
     var now = Date.now();
-    if (!force && now - passed < 20000) return;
+    if (!force && now - passed < 20000) {
+      // Not dropped: held until the floor expires and then run, keeping only the
+      // latest, because where the page ended up matters more than every step.
+      held = String(observation || '');
+      clearTimeout(pending);
+      pending = setTimeout(release, 20000 - (now - passed));
+      return;
+    }
+    // A pass is running now, so anything held is older news than it.
+    clearTimeout(pending);
+    pending = 0;
+    held = null;
     passed = now;
     try {
       var res = await fetch(new URL('/api/witness', endpoint).toString(), {
@@ -413,6 +432,8 @@ var CLIENT = String.raw`(function () {
     else if (act === 'watch') {
       setWatch(!watchOn());
       btn.textContent = watchOn() ? 'watch on' : 'watch off';
+      // Off means off: nothing waiting in the wings either.
+      if (!watchOn()) { held = null; clearTimeout(pending); pending = 0; }
     }
   });
 
