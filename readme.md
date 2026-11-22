@@ -57,17 +57,17 @@ Context must retain its provenance. AA must distinguish what it directly observe
 
 Application awareness is not unrestricted access. Context acquisition must respect authorization, privacy, and the technical boundaries of the host environment.
 
-Mind as the Initial Application Context
+The Initial Application Context
 
-Mind is an initial and important example of the environment AA must understand.
+The card surface is an initial and important example of the environment AA must understand.
 
-Mind provides a card-based AI interaction system with its own application architecture, truth layers, dictation, attachments, sessions, and relationships with other systems such as CODS and the Truth worker.
+It provides an AI interaction system with its own application architecture, truth layers, dictation, attachments, sessions, and relationships with other systems such as CODS and the Truth worker.
 
-When accompanying the operator inside Mind, AA should understand the relevant application context rather than treating each card or conversation as an isolated question.
+When accompanying the operator inside it, AA should understand the relevant application context rather than treating each card or conversation as an isolated question.
 
 It should be able to help the operator understand what a card represents, why a result appeared, what information supports it, how it relates to other records, and whether something in the surrounding workflow requires attention.
 
-Mind is an initial application context, not the boundary of AA's capabilities.
+The card surface is an initial application context, not the boundary of AA's capabilities.
 
 The architectural objective is portability: the same AA should be able to accompany the operator across different applications and environments without requiring a separate assistant or independent reasoning foundation for each one.
 
