@@ -211,13 +211,15 @@ var CLIENT = String.raw`(function () {
     rec.start();
   }
 
-  async function send() {
+  async function send(preset) {
     if (busy) return;
-    var said = (input.value || '').trim();
+    // A tapped option arrives as the ask itself: the clarify card's own words, sent
+    // back the way a typed line would be.
+    var said = (typeof preset === 'string' ? preset : input.value || '').trim();
     if (!said) return;
     open(true);
     push({ role: 'user', content: said });
-    input.value = '';
+    if (typeof preset !== 'string') input.value = '';
     var pending = push({ role: 'assistant', content: '…' });
     busy = true;
     bar.classList.add('on');
@@ -229,14 +231,20 @@ var CLIENT = String.raw`(function () {
       });
       var body = await res.json().catch(function () { return null; });
       var failed = Boolean(body && body.error);
-      // A 200 with no text is a decision to say nothing, not a broken answer.
-      var text = (body && body.text) || (body && body.error && body.error.message) || (res.ok ? 'Nothing to say to that.' : 'No answer (' + res.status + ').');
+      // Nothing came back: no answer and no clarify. That is not an answer with a
+      // status code in it — it is the decision and the reason, and nothing spoken.
+      var bare = !failed && body && body.no_answer && !body.text;
+      var text = bare
+        ? 'move: ' + ((body.decision && body.decision.move) || '—') + ' · ' + body.no_answer.reason
+        : (body && body.text) || (body && body.error && body.error.message) || ('No answer (' + res.status + ').');
       if (!failed && body && body.decision && body.decision.id !== undefined && body.decision.id !== null) attachVerdict(pending, body.decision.id);
       pending.textContent = text;
       // A failure is shown as a failure, never spoken as an answer.
       if (failed) pending.className = 'amb-turn bot err';
+      else if (bare) pending.className = 'amb-turn bot quiet';
       else speak(text);
       if (!failed && body && body.intervention) showIntervention(body.intervention);
+      if (!failed && body && body.clarify) offerChoices(pending, body.clarify, body.decision && body.decision.id);
       thread[thread.length - 1] = { role: 'assistant', content: text };
       if (files.length) { files = []; renderFiles(); }
       if (!failed) {
@@ -249,6 +257,35 @@ var CLIENT = String.raw`(function () {
     busy = false;
     bar.classList.remove('on');
     threadBox.scrollTop = threadBox.scrollHeight;
+  }
+
+  // Her clarify card: the options are what the answer could be, so they are offered
+  // as buttons. A tap sends that option as the next ask; nothing is chosen for him.
+  function offerChoices(el, clarify, id) {
+    var asked = (clarify.questions || [])[0];
+    if (!asked || !asked.q || !asked.options || !asked.options.length) return;
+    var row = document.createElement('div');
+    asked.options.slice(0, 10).forEach(function (option) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = option;
+      button.style.cssText = 'display:block;width:100%;text-align:left;margin:4px 0 0;padding:7px 10px;border-radius:9px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:#dbe3ef;font:inherit;font-size:13px;cursor:pointer';
+      button.addEventListener('click', function () {
+        row.remove();
+        // The choice is the result: it goes back on her row before the next ask, so
+        // the loop closes on what he actually picked and not on what was offered.
+        if (id !== undefined && id !== null) {
+          fetch(new URL('/api/verdict', endpoint).toString(), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: id, correct: false, correctedTo: option })
+          }).catch(function () {});
+        }
+        send(option);
+      });
+      row.appendChild(button);
+    });
+    el.appendChild(row);
   }
 
   // His card on an answer: right, or wrong with one line in place. The verdict is
@@ -666,16 +703,31 @@ async function handleAmbient(request, env) {
   // asked to write out the decision she made — CODS is a writer, not a second
   // opinion, handed her move and her recommendation and asked to say only that.
   const written = await writeOut(env, ask, { intervention, move: decision.move, context });
-  // A greeting the store has no answer for is not a failure. She stayed quiet and the
-  // pen agreed there was nothing to add, so the dock gets a 200 and one honest line
-  // rather than a status code standing where a sentence should be.
-  if (!written.ok && written.reason === "writer_silent") {
+  if (written.ok && written.clarify) {
+    // The reply is her decision carried out as a clarify card: the question and its
+    // options are the answer. Nothing is added to them.
+    const asked = (written.clarify.questions || [])[0] || null;
+    const said = written.text || (asked && asked.q) || "";
     return json({
-      text: "Nothing to say to that.",
+      text: said,
       via: "cods",
       learned,
       decision: face,
       intervention,
+      clarify: written.clarify,
+      outcome: await reportOutcome(env, face.id, said)
+    });
+  }
+  // CODS came back with neither an answer nor a clarify card. The reply says that
+  // and nothing else: the text is empty and the reason is named.
+  if (!written.ok && written.reason === "writer_silent") {
+    return json({
+      text: "",
+      via: "cods",
+      learned,
+      decision: face,
+      intervention,
+      no_answer: { reason: "writer_silent" },
       outcome: null
     });
   }
@@ -683,7 +735,7 @@ async function handleAmbient(request, env) {
     return json({
       error: {
         code: "no_writer",
-        message: "No writer could say it (" + written.reason + ")."
+        message: written.reason
       },
       text: "",
       via: "cods",
@@ -729,8 +781,11 @@ async function writeOut(env, ask, { intervention = null, move = null, context = 
     if (!response.ok) return { ok: false, reason: "writer_" + response.status };
     const data = await response.json().catch(() => null);
     const text = data && (data.answer || data.text || data.response);
-    if (!text || typeof text !== "string") return { ok: false, reason: "writer_silent" };
-    return { ok: true, text };
+    // A clarify card is an answer too: the question and the options come back from
+    // CODS and go to the dock untouched.
+    const clarify = data && data.clarify && Array.isArray(data.clarify.questions) && data.clarify.questions.length ? data.clarify : null;
+    if ((!text || typeof text !== "string") && !clarify) return { ok: false, reason: "writer_silent" };
+    return { ok: true, text: typeof text === "string" ? text : "", clarify };
   } catch (error) {
     return { ok: false, reason: "writer_failed" };
   }
