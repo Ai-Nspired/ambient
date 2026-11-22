@@ -7,8 +7,9 @@
     // generated — over a binding, because a workers.dev Worker may not fetch
     // another workers.dev hostname (Cloudflare 1042).
     { "binding": "ARA", "service": "ara" },
-    // The neighbours that remain. TRNV is still being tested, so it stays
-    // unbound until it is ready.
+    // TRNV, bound so this Worker can reach it over a service binding.
+    { "binding": "TRNV", "service": "trnv" },
+    // The neighbours that remain.
     { "binding": "CODS", "service": "cods" },
     { "binding": "TEW", "service": "tew" }
   ],
