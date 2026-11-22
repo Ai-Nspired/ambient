@@ -15,7 +15,7 @@ var CLIENT = String.raw`(function () {
   var thread = [];
   var files = [];
   var busy = false;
-  // Her own voice, separate from mind's: switched here, remembered here.
+  // Her own voice: switched here, remembered here.
   var spoken = null;
   function voiceOn() { try { return localStorage.getItem('amb.voice') === 'on'; } catch (err) { return false; } }
   function setVoice(on) { try { localStorage.setItem('amb.voice', on ? 'on' : 'off'); } catch (err) {} }
@@ -229,7 +229,8 @@ var CLIENT = String.raw`(function () {
       });
       var body = await res.json().catch(function () { return null; });
       var failed = Boolean(body && body.error);
-      var text = (body && body.text) || (body && body.error && body.error.message) || ('No answer (' + res.status + ').');
+      // A 200 with no text is a decision to say nothing, not a broken answer.
+      var text = (body && body.text) || (body && body.error && body.error.message) || (res.ok ? 'Nothing to say to that.' : 'No answer (' + res.status + ').');
       if (!failed && body && body.decision && body.decision.id !== undefined && body.decision.id !== null) attachVerdict(pending, body.decision.id);
       pending.textContent = text;
       // A failure is shown as a failure, never spoken as an answer.
@@ -660,21 +661,81 @@ async function handleAmbient(request, env) {
       outcome: await reportOutcome(env, face.id, hers.text)
     });
   }
-  // She was asked and wrote nothing. Mind is gone and there is no second voice
-  // behind her to fill the silence, so the decision stands as it is and the dock
-  // says that rather than putting words in her mouth.
+  // She decided and wrote nothing. Measured against the deployed ARA, that is every
+  // ask: `/decide` returns the move and the notes, never a sentence. So the pen is
+  // asked to write out the decision she made — CODS is a writer, not a second
+  // opinion, handed her move and her recommendation and asked to say only that.
+  const written = await writeOut(env, ask, { intervention, move: decision.move, context });
+  // A greeting the store has no answer for is not a failure. She stayed quiet and the
+  // pen agreed there was nothing to add, so the dock gets a 200 and one honest line
+  // rather than a status code standing where a sentence should be.
+  if (!written.ok && written.reason === "writer_silent") {
+    return json({
+      text: "Nothing to say to that.",
+      via: "cods",
+      learned,
+      decision: face,
+      intervention,
+      outcome: null
+    });
+  }
+  if (!written.ok) {
+    return json({
+      error: {
+        code: "no_writer",
+        message: "No writer could say it (" + written.reason + ")."
+      },
+      text: "",
+      via: "cods",
+      learned,
+      decision: face,
+      intervention
+    }, 503);
+  }
   return json({
-    error: {
-      code: "ara_silent",
-      message: "ARA made the decision and did not write it out, and there is no other voice here to write it."
-    },
-    text: "",
-    via: "ara",
+    text: written.text,
+    via: "cods",
     learned,
     decision: face,
-    intervention
-  }, 503);
+    intervention,
+    outcome: await reportOutcome(env, face.id, written.text)
+  });
 }
+
+/**
+ * The pen.
+ *
+ * Her decision is the instruction and the writer is told so: what to do, in her
+ * recommendation's words, about what he actually asked. If no writer is bound the
+ * answer is nothing at all, said honestly, rather than words from somewhere the
+ * decision never reached.
+ */
+async function writeOut(env, ask, { intervention = null, move = null, context = "" } = {}) {
+  const binding = env && env.CODS && typeof env.CODS.fetch === "function" ? env.CODS : null;
+  if (!binding) return { ok: false, reason: "writer_unbound" };
+  const direction = [
+    move ? `move: ${move}` : "",
+    intervention && intervention.recommend ? `recommend: ${intervention.recommend}` : "",
+    context ? `the page he is on: ${context}` : ""
+  ].filter(Boolean).join("\n");
+  try {
+    const response = await binding.fetch(
+      new Request("https://cods/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: String(ask).slice(0, 8e3), context: direction.slice(0, 2e3) })
+      })
+    );
+    if (!response.ok) return { ok: false, reason: "writer_" + response.status };
+    const data = await response.json().catch(() => null);
+    const text = data && (data.answer || data.text || data.response);
+    if (!text || typeof text !== "string") return { ok: false, reason: "writer_silent" };
+    return { ok: true, text };
+  } catch (error) {
+    return { ok: false, reason: "writer_failed" };
+  }
+}
+__name(writeOut, "writeOut");
 __name(handleAmbient, "handleAmbient");
 async function decideFirst(env, ask, { thread = [], prefs = [], files = [], looking = "", mode = "ask" } = {}) {
   const binding = env && env.ARA && typeof env.ARA.fetch === "function" ? env.ARA : null;
