@@ -475,16 +475,6 @@ var DEMO = `<!DOCTYPE html>
 <script src="/embed.js" data-accent="#4a9eff" data-title="Ambient" data-render="true"><\/script>
 </body>
 </html>`;
-var BRIEF = [
-  "You are the ambient assistant, dropped into whatever page the owner has open.",
-  "You are the go-between between him and the system: you can see what he is looking at and you can talk to both sides.",
-  "How to work:",
-  "- Answer, or ask the one thing that unblocks you. No preamble, no flattery, no restating the question.",
-  "- Short by default. He is working, not reading.",
-  "- Never invent what a document says. If the attached text is cut off, say what you would need.",
-  "- When a claim needs checking, name the check that would settle it.",
-  "- Markdown is fine when it helps structure; plain sentences when it does not."
-].join("\n");
 var json = /* @__PURE__ */ __name((body, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
@@ -622,8 +612,6 @@ async function handleAmbient(request, env) {
   }
   const files = cleanFiles(body?.files);
   const context = String(body?.context || "").slice(0, 2e3);
-  const documents = files.filter((file) => file.text).map((file) => `Attached document "${file.name}":
-${file.text}`).join("\n\n");
   const prefs = await loadPrefs(env);
   const first = await decideFirst(env, ask, { thread, prefs, files, looking: context });
   // ARA is the reasoning authority. Without her there is no answer to give, and
@@ -672,78 +660,20 @@ ${file.text}`).join("\n\n");
       outcome: await reportOutcome(env, face.id, hers.text)
     });
   }
-  const standing = "When he states a standing preference rather than a one-off instruction, follow it and end your reply with a single line: PREF: <the preference, one sentence>. Do that for standing preferences only, never for a one-off ask. A preference is a rule about how he wants things done, not a fact about the work.";
-  // She decided and did not write the words, so the words follow her decision.
-  const frame = "ARA has already decided this and the decision is binding. You are her voice, not a second opinion: answer inside her decision, never around it, and do not re-decide what she settled.\nHer decision: " + JSON.stringify({ move: face.move, domain: face.domain, target: face.target, cost: face.cost }) + " (id " + String(face.id ?? "none") + ").";
-  const messages = [{ role: "system", content: BRIEF + prefsBlock(prefs) + "\n\n" + standing + (context ? `
-
-He is looking at: ${context}` : "") }, ...thread];
-  messages.splice(1, 0, { role: "system", content: frame });
-  if (documents) {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role !== "user") continue;
-      messages[i] = { role: "user", content: `${messages[i].content}
-
-${documents}` };
-      break;
-    }
-  }
-  const key = env?.OPENROUTER_API_KEY;
-  if (key) {
-    const images = files.filter((file) => file.image && file.dataUrl).map((file) => file.dataUrl);
-    const parts = messages.map(
-      (message, index) => index === messages.length - 1 && images.length ? { role: message.role, content: [{ type: "text", text: message.content }, ...images.map((url) => ({ type: "image_url", image_url: { url } }))] } : message
-    );
-    try {
-      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: env.MODEL || "openai/gpt-4o-mini", messages: parts, max_tokens: 1200 })
-      });
-      const data2 = await upstream.json().catch(() => null);
-      if (!upstream.ok) {
-        return json({ error: { code: "upstream_error", message: data2?.error?.message || `OpenRouter ${upstream.status}` } }, 502);
-      }
-      const parsed2 = extractPrefs(data2?.choices?.[0]?.message?.content || "");
-      for (const preference of parsed2.learned) {
-        if (learned.some((entry) => entry.text === preference)) continue;
-        const saved = await savePref(env, preference);
-        if (saved) learned.push(saved);
-      }
-      return json({ text: parsed2.text, via: "ara+model", learned, decision: face, intervention, outcome: await reportOutcome(env, face.id, parsed2.text) });
-    } catch (err) {
-      return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
-    }
-  }
-  const payload = JSON.stringify({
-    thread,
-    context: [frame, context + prefsBlock(prefs)].join(" ").slice(0, 12e3),
-    files: files.map((file) => ({ name: file.name, url: "", contentType: file.image ? "image/*" : "text/plain", text: file.text, image: false }))
-  });
-  let forwarded;
-  try {
-    forwarded = env?.MIND && typeof env.MIND.fetch === "function" ? await env.MIND.fetch(new Request("https://mind/api/assist", { method: "POST", headers: { "content-type": "application/json" }, body: payload })) : await fetch(env?.UPSTREAM || "https://mind.ai-n.workers.dev/api/assist", { method: "POST", headers: { "content-type": "application/json" }, body: payload });
-  } catch (err) {
-    return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
-  }
-  const raw = await forwarded.text().catch(() => "");
-  let data = null;
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    data = null;
-  }
-  if (!forwarded.ok) {
-    const detail = data?.error?.message || raw.slice(0, 300) || "no body";
-    return json({ error: { code: "upstream_error", message: `Upstream ${forwarded.status}: ${detail}` } }, 502);
-  }
-  const parsed = extractPrefs(String(data?.text || ""));
-  for (const preference of parsed.learned) {
-    if (learned.some((entry) => entry.text === preference)) continue;
-    const saved = await savePref(env, preference);
-    if (saved) learned.push(saved);
-  }
-  return json({ text: parsed.text, via: "ara+model", learned, decision: face, intervention, outcome: await reportOutcome(env, face.id, parsed.text) });
+  // She was asked and wrote nothing. Mind is gone and there is no second voice
+  // behind her to fill the silence, so the decision stands as it is and the dock
+  // says that rather than putting words in her mouth.
+  return json({
+    error: {
+      code: "ara_silent",
+      message: "ARA made the decision and did not write it out, and there is no other voice here to write it."
+    },
+    text: "",
+    via: "ara",
+    learned,
+    decision: face,
+    intervention
+  }, 503);
 }
 __name(handleAmbient, "handleAmbient");
 async function decideFirst(env, ask, { thread = [], prefs = [], files = [], looking = "", mode = "ask" } = {}) {
@@ -821,9 +751,7 @@ var worker_default = {
       return json({
         status: "ok",
         worker: "ambient",
-        direct: Boolean(env?.OPENROUTER_API_KEY),
         ara: Boolean(env?.ARA),
-        upstream: env?.UPSTREAM || null,
         memory: Boolean(env?.PREFS)
       });
     }
