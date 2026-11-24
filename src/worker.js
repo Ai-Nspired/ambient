@@ -66,6 +66,7 @@ var CLIENT = String.raw`(function () {
     '.amb-card{border:1px solid var(--amb-accent);border-radius:10px;background:#141821;color:#e6e9ef;padding:12px;box-shadow:0 0 0 1px rgba(74,158,255,.18)}',
     '.amb-card .amb-q{font-size:11px;opacity:.55;margin-bottom:6px}',
     '.amb-card .amb-a{white-space:pre-wrap}',
+    '.amb-options{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}',
     '@media (max-width:520px){.amb-panel{width:92vw}}'
   ].join('\n');
 
@@ -193,9 +194,9 @@ var CLIENT = String.raw`(function () {
     rec.start();
   }
 
-  async function send() {
+  async function send(choice, label) {
     if (busy) return;
-    var said = (input.value || '').trim();
+    var said = (choice ? String(label || '') : input.value || '').trim();
     if (!said) return;
     open(true);
     push({ role: 'user', content: said });
@@ -207,12 +208,13 @@ var CLIENT = String.raw`(function () {
       var res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ thread: thread.slice(0, -1), files: files, context: document.title || '' })
+        body: JSON.stringify({ thread: thread.slice(0, -1), files: files, context: document.title || '', ...(choice ? { choice: choice } : {}) })
       });
       var body = await res.json().catch(function () { return null; });
       var text = (body && body.text) || (body && body.error && body.error.message) || ('No answer (' + res.status + ').');
       if (body && body.decision && body.decision.id !== undefined && body.decision.id !== null) attachVerdict(pending, body.decision.id);
       pending.textContent = text;
+      if (body && body.card && body.card.options && body.card.options.length) choiceRow(pending, body.card.options);
       speak(text);
       thread[thread.length - 1] = { role: 'assistant', content: text };
       if (files.length) { files = []; renderFiles(); }
@@ -276,6 +278,24 @@ var CLIENT = String.raw`(function () {
     no.onclick = wrong;
     row.appendChild(yes);
     row.appendChild(no);
+    el.appendChild(row);
+  }
+
+  // Her card's choices, under the answer. A tap sends the value she named and
+  // not the words on the button: the label is for him, the value is for her.
+  function choiceRow(el, list) {
+    var row = document.createElement('div');
+    row.className = 'amb-options';
+    list.forEach(function (option) {
+      var btn = document.createElement('button');
+      btn.className = 'amb-vbtn';
+      btn.textContent = option.label;
+      btn.onclick = function () {
+        row.remove();
+        send(option.value, option.label);
+      };
+      row.appendChild(btn);
+    });
     el.appendChild(row);
   }
 
@@ -458,7 +478,7 @@ async function handleAmbient(request, env) {
   const documents = files.filter((file) => file.text).map((file) => `Attached document "${file.name}":
 ${file.text}`).join("\n\n");
   const prefs = await loadPrefs(env);
-  const decision = await decideFirst(env, ask, { thread, prefs, files, looking: context });
+  const decision = await decideFirst(env, ask, { thread, prefs, files, looking: context, choice: body?.choice || null });
   if (decision && decision.clarify) {
     const asked = (decision.clarify.questions || [])[0] || null;
     return json({
@@ -466,6 +486,7 @@ ${file.text}`).join("\n\n");
       // The decision was made; this is what came of it, so she hears it.
       outcome: await reportOutcome(env, decision.id ?? null, decision.text || asked && asked.q || ""),
       clarify: decision.clarify,
+      card: decision.card,
       decision: { id: decision.id, move: decision.move, domain: decision.domain, target: decision.target },
       via: "ara"
     });
@@ -506,7 +527,7 @@ ${documents}` };
         const saved = await savePref(env, preference);
         if (saved) learned.push(saved);
       }
-      return json({ text: parsed2.text, via: "openrouter", learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
+      return json({ text: parsed2.text, via: "openrouter", learned, card: decision?.card ?? null, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
     } catch (err) {
       return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
     }
@@ -539,10 +560,10 @@ ${documents}` };
     const saved = await savePref(env, preference);
     if (saved) learned.push(saved);
   }
-  return json({ text: parsed.text, via: "upstream", learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed.text) });
+  return json({ text: parsed.text, via: "upstream", learned, card: decision?.card ?? null, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed.text) });
 }
 __name(handleAmbient, "handleAmbient");
-async function decideFirst(env, ask, { thread = [], prefs = [], files = [], looking = "" } = {}) {
+async function decideFirst(env, ask, { thread = [], prefs = [], files = [], looking = "", choice = null } = {}) {
   const binding = env && env.ARA && typeof env.ARA.fetch === "function" ? env.ARA : null;
   if (!binding) return null;
   const context = {
@@ -562,7 +583,7 @@ async function decideFirst(env, ask, { thread = [], prefs = [], files = [], look
       new Request("https://ara/decide", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: ask, domain: "general", surface: "ambient", context })
+        body: JSON.stringify({ text: ask, domain: "general", surface: "ambient", context, ...(choice ? { choice } : {}) })
       })
     );
     if (!response.ok) return null;
@@ -575,7 +596,10 @@ async function decideFirst(env, ask, { thread = [], prefs = [], files = [], look
       target: data.target ?? null,
       cost: data.cost ?? null,
       text: data.text ?? null,
-      clarify: data.clarify ?? null
+      clarify: data.clarify ?? null,
+      // Her card carries the choices. `clarify` is only set when she is asking,
+      // so without this a decision's options never leave ARA.
+      card: data.card ?? null
     };
   } catch {
     return null;
