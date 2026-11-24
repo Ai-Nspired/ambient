@@ -1139,14 +1139,14 @@ async function handleDiagnose(request, env) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ input: question }),
-        signal: AbortSignal.timeout(1200)
+        signal: AbortSignal.timeout(8000)
       }));
       const data = await response.json().catch(() => null);
       const answer = String(data?.answer || "").trim();
       if (answer) ruling = { answer: answer.slice(0, 800), id: data && data.id != null ? data.id : null, layer: (data && data.layer) || "truth" };
       else if (!response.ok) silence = "the truth store answered " + response.status + (data && data.error ? ": " + String(data.error).slice(0, 90) : "");
     } catch {
-      silence = "the truth store could not be reached within 1.2s";
+      silence = "the truth store could not be reached within 8s";
     }
     if (!ruling) checks.push({ name: "truth reply", ok: false, note: silence });
   }
