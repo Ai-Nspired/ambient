@@ -19,8 +19,42 @@
     { "binding": "PREFS", "id": "4a9bfbffb4d440cba86badc508e2045a" }
   ],
   "vars": {
+    // The account this Worker belongs to: the browser-rendering route is built
+    // from it, so no URL is assembled by guesswork.
+    "CF_ACCOUNT": "771ee2cc20f09248129114b7535b2cc9",
     // No model route is declared: ARA answers, and when she does not, the dock
     // says so instead of reaching for another voice.
     "ACCENT": "#4a9eff"
-  }
+  },
+  // The store the cards page reads before it asks her. Bound the way the cards
+  // Worker binds it, because that shape is known to work here — a services entry
+  // is checked against the account at deploy time and a binding to a Worker that
+  // is not there fails the whole deploy. Read-only on this side: nothing is
+  // written through it.
+  "unsafe": {
+    "bindings": [
+      // The account's own agent browser, bound by the name his config gives it.
+      // Nothing here calls it yet: it answers as a devtools endpoint
+      // (/json/version, /v1/devtools/browser), not as a page-to-text route.
+      {
+        "name": "ABROWSER",
+        "type": "service",
+        "service": "agent-browsing",
+        "environment": "production",
+        "entrypoint": "default"
+      },
+      {
+        "name": "TRUTH",
+        "type": "service",
+        "service": "truth",
+        "environment": "production",
+        "entrypoint": "default"
+      }
+    ]
+  },
+  // Dynamic Workers: code loaded at runtime into its own sandbox, for work that
+  // should not run inside this Worker's own isolate.
+  "worker_loaders": [
+    { "binding": "LOADER" }
+  ]
 }
