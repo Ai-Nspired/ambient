@@ -731,21 +731,82 @@ async function loadPrefs(env) {
     } catch {
       record = { text: raw };
     }
-    if (record && typeof record.text === "string" && record.text.trim()) prefs.push(record);
+    if (!record || typeof record.text !== "string" || !record.text.trim()) continue;
+    // Records written before kinds existed carry neither field. They are read as
+    // what they were, a statement he made, and the store is not rewritten behind
+    // his back to say so.
+    prefs.push(Object.assign({}, record, { kind: record.kind || "stated", status: record.status || "active" }));
   }
   return prefs.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
 }
 __name(loadPrefs, "loadPrefs");
-async function savePref(env, text, source = "ambient", actor = "owner") {
+// A preference is not one kind of thing. What he states is standing; what a model
+// writes down is a candidate, and only he can make it standing; what is inferred
+// is recorded as such and never quoted back. The kind and the status are kept
+// beside the words, because the difference is the whole of what makes a memory
+// auditable afterwards.
+async function savePref(env, text, source = "ambient", actor = "owner", kind = "stated", status = kind === "stated" ? "active" : "candidate") {
   const clean = String(text || "").replace(/\s+/g, " ").trim().slice(0, 500);
   if (!clean || !env?.PREFS?.put) return null;
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clean.toLowerCase()));
   const id = [...new Uint8Array(digest)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
-  const record = { id, text: clean, at: (/* @__PURE__ */ new Date()).toISOString(), source, actor };
+  const record = { id, text: clean, kind, status, source, actor, at: (/* @__PURE__ */ new Date()).toISOString() };
   await env.PREFS.put(PREF_PREFIX + id, JSON.stringify(record));
   return record;
 }
 __name(savePref, "savePref");
+// The only path that changes a status. A model that wrote a candidate cannot call
+// it: it is reached by the operator's own request and nobody else's.
+async function setPrefStatus(env, id, status) {
+  const clean = String(id || "").replace(/[^0-9a-f]/g, "").slice(0, 16);
+  if (!clean || ["active", "candidate", "rejected"].indexOf(String(status)) < 0) return null;
+  const store = env && env.PREFS && typeof env.PREFS.get === "function" && typeof env.PREFS.put === "function" ? env.PREFS : null;
+  if (!store) return null;
+  const raw = await store.get(PREF_PREFIX + clean).catch(() => null);
+  if (!raw) return null;
+  let record = null;
+  try {
+    record = JSON.parse(raw);
+  } catch {
+    record = { text: raw };
+  }
+  if (!record || typeof record.text !== "string") return null;
+  const next = Object.assign({}, record, {
+    id: clean,
+    kind: record.kind || "stated",
+    status: String(status),
+    decidedBy: "owner",
+    decidedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  await store.put(PREF_PREFIX + clean, JSON.stringify(next));
+  return next;
+}
+__name(setPrefStatus, "setPrefStatus");
+// ---- authorization ---------------------------------------------------------
+
+// One switch, off until he sets it. Off, AA still answers and still remembers, but
+// nothing it concludes becomes ARA's evidence: a verdict is refused and an outcome
+// report is skipped. The store holds the state, so a deploy cannot quietly reset it.
+var AUTH_KEY = "state:authorization";
+async function readAuthorization(env) {
+  const store = env && env.PREFS && typeof env.PREFS.get === "function" ? env.PREFS : null;
+  if (!store) return { on: false, at: null, known: false };
+  try {
+    const held = JSON.parse((await store.get(AUTH_KEY)) || "null");
+    return { on: Boolean(held && held.on === true), at: held && held.at || null, known: Boolean(held) };
+  } catch {
+    return { on: false, at: null, known: false };
+  }
+}
+__name(readAuthorization, "readAuthorization");
+async function setAuthorization(env, on) {
+  const store = env && env.PREFS && typeof env.PREFS.put === "function" ? env.PREFS : null;
+  if (!store) return null;
+  const state = { on: on === true, by: "owner", at: (/* @__PURE__ */ new Date()).toISOString() };
+  await store.put(AUTH_KEY, JSON.stringify(state));
+  return state;
+}
+__name(setAuthorization, "setAuthorization");
 function extractPrefs(text) {
   const learned = [];
   const kept = [];
@@ -758,8 +819,12 @@ function extractPrefs(text) {
 }
 __name(extractPrefs, "extractPrefs");
 function prefsBlock(prefs) {
-  if (!prefs.length) return "";
-  return "\n\nWhat he has already told you he wants, in his own words:\n" + prefs.slice(0, 30).map((pref) => "- " + pref.text).join("\n") + "\n\nThese are standing. Follow them without being reminded, and never argue them down.";
+  // Only standing memory is quoted to a model. A candidate is one a model wrote,
+  // and handing it back to a model would let the model that wrote it promote it
+  // by repeating itself.
+  const standing = prefs.filter((pref) => (pref.status || "active") === "active");
+  if (!standing.length) return "";
+  return "\n\nWhat he has already told you he wants, in his own words:\n" + standing.slice(0, 30).map((pref) => "- " + pref.text).join("\n") + "\n\nThese are standing. Follow them without being reminded, and never argue them down.";
 }
 __name(prefsBlock, "prefsBlock");
 function snapshotBlock(previous, mode, ask) {
@@ -833,6 +898,9 @@ function observedIntervention(decision) {
 __name(observedIntervention, "observedIntervention");
 async function reportOutcome(env, id, returned) {
   if (id === null || id === void 0) return "no_decision_id";
+  // Off by default. An outcome report is AA's account of a turn becoming ARA's
+  // evidence, and that is exactly what the switch withholds.
+  if (!(await readAuthorization(env)).on) return "authorization_off";
   if (!env?.ARA || typeof env.ARA.fetch !== "function") return "ara_unbound";
   if (!env?.ARA_KEY) return "ara_key_unset";
   try {
@@ -1468,7 +1536,9 @@ async function handleAmbient(request, env) {
     const hers = extractPrefs(decision.text);
     for (const preference of hers.learned) {
       if (learned.some((entry) => entry.text === preference)) continue;
-      const saved = await savePref(env, preference);
+      // Written by a model, so it is a candidate and not a standing rule: the
+      // words are kept with their provenance and wait for him to promote them.
+      const saved = await savePref(env, preference, "ara", "model", "model_suggested", "candidate");
       if (saved) learned.push(saved);
     }
     return json({
@@ -1730,7 +1800,9 @@ __name(saveModel, "saveModel");
 // What a pick looks like on the wire to the store: each route has its own field,
 // and picking one is also saying where it goes.
 async function routeOf(env, pick) {
-  const chosen = cleanPick(pick) || (await readModel(env));
+  // Until he picks, the model named in the config writes. A paid one, because a
+  // free model's terms let the provider keep what is sent to it.
+  const chosen = cleanPick(pick) || (await readModel(env)) || cleanPick({ id: env?.MODEL, route: "openrouter" });
   if (!chosen) return {}
   if (chosen.route === "cf") return { cf_models: [chosen.id], proxy: false };
   // A preset is named, not spelled out: the proxy only takes it as @preset/<slug>.
@@ -2090,7 +2162,9 @@ var worker_default = {
     }
     if (url.pathname === "/api/prefs" && request.method === "GET") {
       const prefs = await loadPrefs(env);
-      const response = json({ prefs, count: prefs.length });
+      const standing = prefs.filter((pref) => pref.status === "active").length;
+      const candidates = prefs.filter((pref) => pref.status === "candidate").length;
+      const response = json({ prefs, count: prefs.length, standing, candidates });
       response.headers.set("access-control-allow-origin", "*");
       return response;
     }
@@ -2101,12 +2175,52 @@ var worker_default = {
       } catch {
         return json({ error: { code: "invalid_json", message: "Invalid JSON body" } }, 400);
       }
+      // Promoting or rejecting is the only way a status changes, and the only way
+      // a model-written candidate ever becomes something she is told to follow.
+      if (body && body.id) {
+        const next = await setPrefStatus(env, body.id, body.status);
+        const response = next
+          ? json({ ok: true, pref: next })
+          : json({ error: { code: "pref_unmatched", message: "Send { id, status } for a stored preference, where status is active, rejected or candidate." } }, 400);
+        response.headers.set("access-control-allow-origin", "*");
+        return response;
+      }
       const saved = await savePref(env, body?.text, "owner", "owner");
       const response = saved ? json({ ok: true, pref: saved }) : json({ error: { code: "pref_required", message: "Send { text } and make sure the PREFS binding exists." } }, 400);
       response.headers.set("access-control-allow-origin", "*");
       return response;
     }
     
+    if (url.pathname === "/api/authorization") {
+      // The switch is the operator's. When a key is configured it is required; when
+      // it is not, this route is no more open than the rest of this Worker's writes.
+      if (env?.OPERATOR_KEY && request.headers.get("x-operator-key") !== env.OPERATOR_KEY) {
+        return json({ error: { code: "operator_key_required", message: "Send the operator key in x-operator-key." } }, 403);
+      }
+      if (request.method === "GET") {
+        const state = await readAuthorization(env);
+        const response = json({ ok: true, authorization: state });
+        response.headers.set("access-control-allow-origin", "*");
+        return response;
+      }
+      if (request.method === "POST") {
+        let body;
+        try {
+          body = await request.json();
+        } catch {
+          return json({ error: { code: "invalid_json", message: "Invalid JSON body" } }, 400);
+        }
+        if (typeof body?.on !== "boolean") {
+          return json({ error: { code: "on_required", message: "Send { on: true } or { on: false }." } }, 400);
+        }
+        const state = await setAuthorization(env, body.on);
+        if (!state) return json({ error: { code: "prefs_unbound", message: "The store that keeps the switch is not bound." } }, 503);
+        const response = json({ ok: true, authorization: { on: state.on, at: state.at, known: true } });
+        response.headers.set("access-control-allow-origin", "*");
+        return response;
+      }
+      return json({ error: { code: "method_not_allowed" } }, 405);
+    }
     if (url.pathname === "/api/verdict" && request.method === "POST") {
       let verdict;
       try {
@@ -2116,6 +2230,9 @@ var worker_default = {
       }
       if (verdict?.id === undefined || verdict?.id === null) {
         return json({ error: { code: "id_required", message: "Send { id, correct, correctedTo }." } }, 400);
+      }
+      if (!(await readAuthorization(env)).on) {
+        return json({ error: { code: "authorization_off", message: "Authorization is off: nothing AA concludes becomes ARA's evidence until you turn it on." } }, 403);
       }
       if (!env?.ARA || typeof env.ARA.fetch !== "function") return json({ error: { code: "ara_unbound" } }, 503);
       if (!env?.ARA_KEY) return json({ error: { code: "ara_key_unset" } }, 503);

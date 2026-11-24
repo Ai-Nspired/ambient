@@ -22,8 +22,10 @@
     // The account this Worker belongs to: the browser-rendering route is built
     // from it, so no URL is assembled by guesswork.
     "CF_ACCOUNT": "771ee2cc20f09248129114b7535b2cc9",
-    // No model route is declared: ARA answers, and when she does not, the dock
-    // says so instead of reaching for another voice.
+    // The model the pen writes with until he picks one in the dock. ARA still
+    // decides; this is only the voice that repeats what she decided, and it is a
+    // paid model because a free one's terms let the provider keep the prompt.
+    "MODEL": "mistralai/mistral-nemo",
     "ACCENT": "#4a9eff"
   },
   // The store the cards page reads before it asks her. Bound the way the cards
