@@ -863,13 +863,10 @@ async function diagId(record) {
 __name(diagId, "diagId");
 async function diagStore(env, id, record) {
   const store = env && env.PREFS && typeof env.PREFS.put === "function" ? env.PREFS : null;
-  if (!store || !id) return null;
+  if (!store) return;
   try {
     await store.put("diag:" + id, JSON.stringify(record), { expirationTtl: 60 * 60 * 24 * 30 });
-    return id;
-  } catch {
-    return null;
-  }
+  } catch {}
 }
 __name(diagStore, "diagStore");
 
@@ -890,27 +887,33 @@ async function hmacKey(secret) {
   return crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 }
 __name(hmacKey, "hmacKey");
+// The payload both sides sign, so a change to its shape cannot be made on one side
+// only.
+function pressSigned(expires, card, cap) {
+  return expires + "." + card + "." + cap;
+}
+__name(pressSigned, "pressSigned");
+async function pressSign(secret, text) {
+  return b64url(await crypto.subtle.sign("HMAC", await hmacKey(secret), new TextEncoder().encode(text)));
+}
+__name(pressSign, "pressSign");
 async function pressKey(env, card, cap) {
   const secret = env && env.DIAL_TOKEN;
   if (!secret || !card) return null;
   const expires = Date.now() + 60 * 1000;
-  const payload = expires + "." + card + "." + cap;
-  const signature = b64url(await crypto.subtle.sign("HMAC", await hmacKey(secret), new TextEncoder().encode(payload)));
-  return "v1." + payload + "." + signature;
+  const payload = pressSigned(expires, card, cap);
+  return "v1." + payload + "." + (await pressSign(secret, payload));
 }
 __name(pressKey, "pressKey");
 async function readPress(env, key) {
   const secret = env && env.DIAL_TOKEN;
   const parts = String(key || "").split(".");
   if (!secret || parts.length !== 5 || parts[0] !== "v1") return null;
-  const expires = parts[1];
-  const card = parts[2];
-  const cap = parts[3];
-  const signature = parts[4];
+  const [, expires, card, cap, signature] = parts;
   if (!/^[0-9a-f]{6,16}$/.test(card)) return null;
   if (cap !== "diff" && cap !== "full") return null;
   if (!(Number(expires) > Date.now())) return null;
-  const expected = b64url(await crypto.subtle.sign("HMAC", await hmacKey(secret), new TextEncoder().encode(expires + "." + card + "." + cap)));
+  const expected = await pressSign(secret, pressSigned(expires, card, cap));
   const held = new TextEncoder().encode(signature);
   const truth = new TextEncoder().encode(expected);
   if (held.length !== truth.length) return null;
@@ -938,7 +941,6 @@ __name(squelch, "squelch");
 function cardJson(body, status) {
   const response = json(body, status);
   response.headers.set("access-control-allow-origin", "*");
-  response.headers.set("access-control-allow-methods", "GET");
   response.headers.set("cache-control", "no-store");
   return response;
 }
@@ -956,14 +958,13 @@ async function handleDiagCard(url, env) {
   }
   const store = env && env.PREFS && typeof env.PREFS.get === "function" ? env.PREFS : null;
   const raw = store ? await store.get("diag:" + id) : null;
-  if (!raw) return cardJson({ ok: false, error: { code: "no_card", message: "No diagnosis is stored under " + id + "." } }, 404);
   let card = null;
   try {
-    card = JSON.parse(raw);
+    card = raw ? JSON.parse(raw) : null;
   } catch {
     card = null;
   }
-  if (!card) return cardJson({ ok: false, error: { code: "no_card", message: "The card under " + id + " cannot be read." } }, 500);
+  if (!card) return cardJson({ ok: false, error: { code: "no_card", message: "No diagnosis is stored under " + id + "." } }, 404);
   // The diff is the whole of what a rest state releases; the checks and the verdict
   // are behind the operator's own press.
   const released = press.cap === "full"
@@ -987,7 +988,7 @@ const DIFF_TARGETS = {
 // when a name is asked of the query string; nothing is remembered between calls, so
 // an edit on the other side shows up on the next diff and nowhere else.
 async function liveReads(env, name) {
-  const target = DIFF_TARGETS[String(name || "").toLowerCase()] || null;
+  const target = DIFF_TARGETS[String(name || "").toLowerCase()];
   const binding = target && env ? env[target.binding] : null;
   if (!binding || typeof binding.fetch !== "function") return null;
   let text = "";
@@ -1006,14 +1007,12 @@ async function liveReads(env, name) {
   }
   if (!text) return null;
   const params = new Set();
-  const names = text.match(/\.get\(\s*['"][A-Za-z_]{1,20}['"]\s*\)/g) || [];
-  names.forEach((hit) => params.add(hit.replace(/^\.get\(\s*['"]|"['"]\s*\)|'\s*\)$/g, "")));
-  const lists = (text.match(/URLSearchParams/g) || []).length;
+  for (const hit of text.matchAll(/\.get\(\s*['"]([A-Za-z_]{1,20})['"]\s*\)/g)) params.add(hit[1]);
   const reads = Array.from(params);
+  const lists = (text.match(/URLSearchParams/g) || []).length;
   return {
     entry: target.entry,
     reads,
-    paths: seen,
     evidence: "live: " + seen.join(" + ") + " — " + lists + " URLSearchParams, reads [" + (reads.join(", ") || "nothing") + "]"
   };
 }
@@ -1023,24 +1022,22 @@ __name(liveReads, "liveReads");
 // before the page's own init: everything else in that file stays as it is.
 function minimalDiff(origin, destination, live) {
   const provides = Array.isArray(origin.provides) ? origin.provides.map(String).filter(Boolean) : [];
-  const known = live || null;
-  const reads = known ? known.reads : Array.isArray(destination.reads) ? destination.reads.map(String) : [];
-  const missing = provides.filter((key) => reads.indexOf(key) < 0);
-  const extra = reads.filter((key) => provides.indexOf(key) < 0);
+  const reads = live ? live.reads : Array.isArray(destination.reads) ? destination.reads.map(String) : [];
+  const missing = provides.filter((key) => !reads.includes(key));
+  const extra = reads.filter((key) => !provides.includes(key));
+  const entry = (live && live.entry) || destination.entry || "the destination's entry script";
   const edits = missing.map((key) => ({
-    file: known ? known.entry : destination.entry || "the destination's entry script",
-    where: "before the page's own init, where the first parameter is read",
+    file: entry,
     lines: 1,
-    code: "const " + key + " = new URLSearchParams(location.search).get('" + key + "') || '';",
-    then: "use " + key + " where the page currently starts blank"
+    code: "const " + key + " = new URLSearchParams(location.search).get('" + key + "') || '';"
   }));
   return {
-    origin: { name: origin.name || "ambient", provides, from: origin.from || "the dial's hand-off" },
+    origin: { name: origin.name || "ambient", provides },
     destination: {
       name: destination.name || "unknown",
       reads,
-      entry: known ? known.entry : destination.entry || null,
-      evidence: known ? known.evidence : destination.evidence || "no live read: the destination did not answer"
+      entry,
+      evidence: live ? live.evidence : destination.evidence || "no live read: the destination did not answer"
     },
     missing,
     extra,
@@ -1071,8 +1068,8 @@ async function handleDiff(request, env) {
   } catch {
     body = {};
   }
-  const origin = body.origin && typeof body.origin === "object" ? body.origin : {};
-  const destination = body.destination && typeof body.destination === "object" ? body.destination : {};
+  const origin = body.origin || {};
+  const destination = body.destination || {};
   const diff = minimalDiff(origin, destination, await liveReads(env, destination.name));
   const line = diff.missing.length
     ? diff.destination.name + " reads [" + (diff.destination.reads.join(", ") || "nothing") + "] and the hand-off carries [" + diff.missing.join(", ") + "] — " + diff.blast.lines + " line in " + diff.blast.touches.join(", ") + "."
@@ -1085,12 +1082,9 @@ __name(handleDiff, "handleDiff");
 // page cannot choose, so a stranger's script cannot mint a key by posting its own
 // symptom; a caller holding the dial token can press from anywhere.
 function pressedByPage(request) {
-  const origin = String(request.headers.get("origin") || "");
-  const referer = String(request.headers.get("referer") || "");
-  const host = new URL(request.url).host;
   try {
-    const from = origin ? new URL(origin) : referer ? new URL(referer) : null;
-    return !!from && from.host === host;
+    const from = request.headers.get("origin") || request.headers.get("referer") || "";
+    return !!from && new URL(from).host === new URL(request.url).host;
   } catch {
     return false;
   }
@@ -1117,7 +1111,7 @@ async function handleDiagnose(request, env) {
   const code = String(body?.code || "").slice(0, 80);
   const dialState = String(body?.state || "").slice(0, 120);
   const toName = String(body?.to || "").replace(/[^a-z]/gi, "").slice(0, 24).toLowerCase();
-  const has = (name) => !!(env && env[name] && (typeof env[name].fetch === "function" || typeof env[name].get === "function" || typeof env[name].load === "function"));
+  const has = (name) => !!(env && env[name]);
   const checks = [
     { name: "ara", ok: has("ARA"), note: has("ARA") ? "the decider is bound" : "no ARA binding: nothing can decide" },
     { name: "cods", ok: has("CODS"), note: has("CODS") ? "the card store is bound" : "no CODS binding: no cards can be made" },
@@ -1130,12 +1124,17 @@ async function handleDiagnose(request, env) {
     { name: "dial key", ok: !!env?.DIAL_TOKEN, note: env?.DIAL_TOKEN ? "the dial may call the spending routes" : "no DIAL_TOKEN: /api/look and /api/sandbox refuse the dial" }
   ];
   // The liaison: the truth store is the party allowed to hold what went wrong, so
-  // the diagnosis is put to it as the question. It answers in a breath or not at
-  // all — a store that has to be waited on is itself the fault worth reporting.
+  // the diagnosis is put to it as the question — asked before the verdict is
+  // written, because the verdict is about what the question finds. It answers in a
+  // breath or not at all: a store that has to be waited on is itself the fault.
+  const down = checks.filter((check) => !check.ok);
   let ruling = null;
+  let silence = "the truth store answered nothing this diagnosis";
   if (has("TRUTH")) {
     try {
-      const question = "Diagnosis for the ambient dial. " + (symptom ? "What he saw: " + symptom + ". " : "") + verdict;
+      const question = "Diagnosis for the ambient dial. " + (symptom ? "What he saw: " + symptom + ". " : "") + (down.length
+        ? "Not working: " + down.map((check) => check.name).join(", ") + ". " + down[0].note + "."
+        : "Every binding the dial uses is in place.");
       const response = await env.TRUTH.fetch(new Request("https://truth/api/truth/resolve", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1145,12 +1144,11 @@ async function handleDiagnose(request, env) {
       const data = await response.json().catch(() => null);
       const answer = String(data?.answer || "").trim();
       if (answer) ruling = { answer: answer.slice(0, 800), id: data && data.id != null ? data.id : null, layer: (data && data.layer) || "truth" };
+      else if (!response.ok) silence = "the truth store answered " + response.status + (data && data.error ? ": " + String(data.error).slice(0, 90) : "");
     } catch {
-      ruling = null;
+      silence = "the truth store could not be reached within 1.2s";
     }
-  }
-  if (has("TRUTH") && !ruling) {
-    checks.push({ name: "truth reply", ok: false, note: "the truth store did not answer this diagnosis in 1.2s" });
+    if (!ruling) checks.push({ name: "truth reply", ok: false, note: silence });
   }
   const bad = checks.filter((check) => !check.ok);
   const faults = bad.filter((check) => check.name !== "truth reply");

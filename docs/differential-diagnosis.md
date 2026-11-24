@@ -143,7 +143,7 @@ token is the cryptographic path.
 ```json
 {
   "id": "774f35943207",
-  "verdict": "Every binding the dial uses is in place, but the truth store did not answer this diagnosis in 1.2s.",
+  "verdict": "Every binding the dial uses is in place, but the truth store could not be reached within 1.2s.",
   "faults": ["truth reply"],
   "to": "cods",
   "diff": {

@@ -2128,47 +2128,45 @@ var DRAG_ACCENT = "#9fb0c8";
   // liaison, so the diagnosis leaves the dial through her and not around her.
   var lastCode = '';
 
+  function diagOffline(why) {
+    addCard({ tag: 'diag', name: 'offline', short: 'diagnose offline', kind: 'note', text: why, w: 240, h: 86, x: 10, y: 10, dim: true });
+    layout();
+    setState('diagnose · offline');
+  }
+
   function diagnose() {
-    var said = carryText();
     setState('diagnose · checking');
     pattern('press');
     fetch('/api/diagnose', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ symptom: said, code: lastCode, state: stateEl.textContent, to: lastTo })
+      body: JSON.stringify({ symptom: carryText(), code: lastCode, state: stateEl.textContent, to: lastTo })
     }).then(function (r) { return r.json().catch(function () { return null; }); }).then(function (body) {
-      if (!body || !body.verdict) {
-        addCard({ tag: 'diag', name: 'offline', short: 'diagnose offline', kind: 'note', text: 'The dial could not ask the Worker what is wrong.', w: 240, h: 86, x: 10, y: 10, dim: true });
-        layout();
-        setState('diagnose · offline');
-        return;
-      }
+      if (!body || !body.verdict) return diagOffline('The dial could not ask the Worker what is wrong.');
       var failing = (body.checks || []).filter(function (c) { return !c.ok; });
       var lines = [body.verdict];
-      if (failing.length) failing.forEach(function (c) { lines.push('- ' + c.name + ': ' + c.note); });
-      if (body.diff && body.diff.missing && body.diff.missing.length) {
-        lines.push('', 'origin has [' + body.diff.origin.provides.join(', ') + '] · ' + body.diff.destination.name + ' reads [' + (body.diff.destination.reads.join(', ') || 'nothing') + ']');
-        body.diff.edits.forEach(function (edit) { lines.push('+ ' + edit.code); });
-        lines.push('blast: ' + body.diff.blast.radius);
-        body.diff.checks.forEach(function (c) { lines.push('? ' + c); });
+      failing.forEach(function (c) { lines.push('- ' + c.name + ': ' + c.note); });
+      var diff = body.diff;
+      if (diff && diff.missing.length) {
+        lines.push('', 'origin has [' + diff.origin.provides.join(', ') + '] · ' + diff.destination.name + ' reads [' + (diff.destination.reads.join(', ') || 'nothing') + ']');
+        diff.edits.forEach(function (edit) { lines.push('+ ' + edit.code); });
+        lines.push('blast: ' + diff.blast.radius);
+        diff.checks.forEach(function (c) { lines.push('? ' + c); });
       }
       if (body.ruling && body.ruling.answer) lines.push('', 'tew · ' + body.ruling.answer);
       if (body.id) lines.push('', 'card ' + body.id + ' · key ' + (body.cap || 'diff') + ' · /api/diag?id=' + body.id + '&k=…');
-      var diagCard = addCard({ tag: 'diag', name: failing.length ? failing[0].name : 'all bound', short: 'what is wrong', kind: 'note', text: lines.join('\n'), w: 300, h: 236, x: 10, y: 10 });
-      if (diagCard) {
-        diagCard.diagId = body.id || '';
-        diagCard.diagKey = body.key || '';
-        diagCard.diagCap = body.cap || '';
+      var card = addCard({ tag: 'diag', name: failing.length ? failing[0].name : 'all bound', short: 'what is wrong', kind: 'note', text: lines.join('\n'), w: 300, h: 236, x: 10, y: 10 });
+      if (card) {
+        card.diagId = body.id || '';
+        card.diagKey = body.key || '';
       }
       layout();
       remember('diag', body.verdict.slice(0, 120));
       pattern(failing.length ? 'error' : 'tick');
       say(body.verdict);
-      setState('diagnose · ' + (failing.length ? failing.length + ' failing' : 'all bound') + (body.diff && body.diff.missing.length ? ' · +' + body.diff.blast.lines + ' line' : '') + (body.ruling ? ' · tew' : ''));
+      setState('diagnose · ' + (failing.length ? failing.length + ' failing' : 'all bound') + (diff && diff.missing.length ? ' · +' + diff.blast.lines + ' line' : '') + (body.ruling ? ' · tew' : ''));
     }).catch(function () {
-      addCard({ tag: 'diag', name: 'offline', short: 'diagnose offline', kind: 'note', text: 'The dial could not reach the Worker.', w: 240, h: 86, x: 10, y: 10, dim: true });
-      layout();
-      setState('diagnose · offline');
+      diagOffline('The dial could not reach the Worker.');
     });
   }
 
