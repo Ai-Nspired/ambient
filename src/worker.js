@@ -715,7 +715,7 @@ var json = /* @__PURE__ */ __name((body, status = 200) => new Response(JSON.stri
   headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
 }), "json");
 var PREF_PREFIX = "pref:";
-var PREF_STATEMENT = /^(from now on|going forward|from here on|always\b|never\b|remember(?: that|:)?\b|my preference is\b|i prefer\b|don'?t ever\b|do not ever\b|stop (?:using|doing|writing|saying)\b)/i;
+var PREF_STATEMENT = /^(from now on|going forward|from here on|my preference is\b|i prefer\b|remember(?: that\b|:)|don'?t ever\b|do not ever\b|stop (?:using|doing|writing|saying)\b)/i;
 // The prefs list is his whole standing memory, and a page that carries the dock is
 // the only kind of caller entitled to read it. The Worker's own origin always is
 // one; any other is named in PREFS_ORIGINS, comma separated. An allowlist that
