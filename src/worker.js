@@ -732,6 +732,17 @@ function allowedOrigin(request, env) {
   return { ok: false, origin: null, delegated: false };
 }
 __name(allowedOrigin, "allowedOrigin");
+// Records written before kinds existed carry neither field. They are read as what
+// they were, a statement he made, and the store is never rewritten behind his back
+// to say so. One reading, so the quote and the count cannot disagree.
+function readPref(record) {
+  return Object.assign({}, record, { kind: record.kind || "stated", status: record.status || "active" });
+}
+__name(readPref, "readPref");
+function isStanding(pref) {
+  return Boolean(pref) && (pref.status || "active") === "active";
+}
+__name(isStanding, "isStanding");
 async function loadPrefs(env) {
   if (!env?.PREFS?.list) return [];
   const listed = await env.PREFS.list({ prefix: PREF_PREFIX, limit: 60 }).catch(() => null);
@@ -748,10 +759,7 @@ async function loadPrefs(env) {
       record = { text: raw };
     }
     if (!record || typeof record.text !== "string" || !record.text.trim()) continue;
-    // Records written before kinds existed carry neither field. They are read as
-    // what they were, a statement he made, and the store is not rewritten behind
-    // his back to say so.
-    prefs.push(Object.assign({}, record, { kind: record.kind || "stated", status: record.status || "active" }));
+    prefs.push(readPref(record));
   }
   return prefs.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
 }
@@ -784,7 +792,7 @@ async function savePref(env, text, source = "ambient", actor = "owner", kind = "
     } catch {
       prior = { text: clean };
     }
-    return Object.assign({}, prior, { id, existed: true });
+    return Object.assign(readPref(prior), { id, existed: true });
   }
   const record = { id, text: clean, kind, status, source, actor, at: (/* @__PURE__ */ new Date()).toISOString() };
   await env.PREFS.put(PREF_PREFIX + id, JSON.stringify(record));
@@ -858,7 +866,7 @@ function prefsBlock(prefs) {
   // Only standing memory is quoted to a model. A candidate is one a model wrote,
   // and handing it back to a model would let the model that wrote it promote it
   // by repeating itself.
-  const standing = prefs.filter((pref) => (pref.status || "active") === "active");
+  const standing = prefs.filter(isStanding);
   if (!standing.length) return "";
   return "\n\nWhat he has already told you he wants, in his own words:\n" + standing.slice(0, 30).map((pref) => "- " + pref.text).join("\n") + "\n\nThese are standing. Follow them without being reminded, and never argue them down.";
 }
@@ -2200,7 +2208,7 @@ var worker_default = {
       const gate = allowedOrigin(request, env);
       if (!gate.ok) return json({ error: { code: "origin_denied", message: "This origin is not on the list that may read his memory." } }, 403);
       const prefs = await loadPrefs(env);
-      const standing = prefs.filter((pref) => pref.status === "active").length;
+      const standing = prefs.filter(isStanding).length;
       const candidates = prefs.filter((pref) => pref.status === "candidate").length;
       const inferred = prefs.filter((pref) => pref.kind === "inferred").length;
       const response = json({ prefs, count: prefs.length, standing, candidates, inferred });
