@@ -49,8 +49,8 @@ function check(name, condition, detail) {
   results.push({ name, ok: Boolean(condition), detail });
 }
 
-async function call(store, { method = "POST", origin = ORIGIN, key = null, body = null, path = "/api/prefs" } = {}) {
-  const env = { PREFS: store, PREFS_ORIGINS: PAGE, OPERATOR_KEY: KEY };
+async function call(store, { method = "POST", origin = ORIGIN, key = null, body = null, path = "/api/prefs", extraEnv = {} } = {}) {
+  const env = { PREFS: store, PREFS_ORIGINS: PAGE, OPERATOR_KEY: KEY, ...extraEnv };
   const headers = {};
   if (origin) headers.origin = origin;
   if (body) headers["content-type"] = "application/json";
@@ -154,6 +154,38 @@ async function prefId(text) {
   check("a null kind is still stated", nullKind.code === 200 && nullKind.body.pref?.kind === "stated" && nullKind.body.pref?.status === "active", nullKind.body.pref);
   const empty = await call(store, { body: {}, key: KEY });
   check("no text still maps to pref_required", empty.code === 400 && empty.body.error?.code === "pref_required", empty);
+}
+
+// 6. Ruled A2: a promoted inference is still an inference. `isStanding` is the
+//    single predicate behind both the count and the prompt block, so promoting
+//    one must move both at once — active in the store, absent from `standing`,
+//    and absent from what ARA is handed.
+{
+  const store = memory();
+  const made = await call(store, { body: { text: "he probably wants the short version", kind: "inferred" }, key: KEY });
+  check("an inference is stored as a candidate", made.code === 200 && made.body.pref?.kind === "inferred" && made.body.pref?.status === "candidate", made.body.pref);
+
+  const promoted = await call(store, { body: { id: made.body.pref.id, status: "active" }, key: KEY });
+  check("an inference can be promoted to active", promoted.code === 200 && promoted.body.pref?.status === "active" && promoted.body.pref?.kind === "inferred", promoted.body.pref);
+
+  const listed = await call(store, { method: "GET" });
+  check("a promoted inference is not standing", listed.body.standing === 0 && listed.body.inferred === 1 && listed.body.count === 1, { standing: listed.body.standing, inferred: listed.body.inferred, count: listed.body.count });
+
+  // 7. Ruled B1: a pass that never reached ARA says so, and a pass that did is
+  //    distinguishable from an explicit silence without reading a string.
+  let asked = null;
+  const ara = {
+    async fetch(request) {
+      asked = JSON.parse(await request.text());
+      return new Response(JSON.stringify({ id: "d1", level: 1, text: "noticed" }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+  };
+  const pass = await call(store, { path: "/api/witness", body: {}, extraEnv: { ARA: ara } });
+  check("a promoted inference is not quoted to ARA", pass.code === 200 && asked?.context?.prefs === "", { code: pass.code, prefs: asked?.context?.prefs });
+  check("a measured pass says it measured", pass.code === 200 && pass.body.measured === true, pass.body);
+
+  const blind = await call(store, { path: "/api/witness", body: {} });
+  check("an unmeasured pass says so", blind.code === 503 && blind.body.measured === false && blind.body.level === 0 && blind.body.silent === true, blind.body);
 }
 
 const failed = results.filter((result) => !result.ok);

@@ -748,7 +748,11 @@ function readPref(record) {
 }
 __name(readPref, "readPref");
 function isStanding(pref) {
-  return Boolean(pref) && (pref.status || "active") === "active";
+  // A promoted inference is still an inference. Ruled A2: standing excludes
+  // `inferred`, so promotion cannot make a conclusion drawn from what he did
+  // into words he said. One predicate drives both the count and the quote, so
+  // the two cannot disagree about a record that is active and inferred.
+  return Boolean(pref) && (pref.status || "active") === "active" && (pref.kind || "stated") !== "inferred";
 }
 __name(isStanding, "isStanding");
 async function loadPrefs(env) {
@@ -2363,7 +2367,7 @@ var worker_default = {
       const seen = await decideFirst(env, observation || context || "The operator moved to a different part of the application.", { thread, prefs, looking: context, mode: "witness" });
       if (!seen.ok) {
         // A background pass stays quiet in the dock; /api/ambient carries the alarm.
-        const quiet = json({ level: 0, silent: true, intervention: null, via: "ara", reason: seen.reason }, 503);
+        const quiet = json({ level: 0, silent: true, intervention: null, via: "ara", measured: false, reason: seen.reason }, 503);
         quiet.headers.set("access-control-allow-origin", "*");
         return quiet;
       }
@@ -2377,6 +2381,9 @@ var worker_default = {
         text: decision.text || null,
         decision: { id: decision.id ?? null, move: decision.move ?? null, domain: decision.domain ?? null, target: decision.target ?? null },
         via: "ara",
+        // Ruled B1: a pass that never reached ARA is not the same shape as a pass
+        // that looked and chose silence. `silent` no longer has to mean both.
+        measured: true,
         outcome: intervention ? await reportOutcome(env, decision.id ?? null, intervention.observed || intervention.trigger) : null
       });
       response.headers.set("access-control-allow-origin", "*");
