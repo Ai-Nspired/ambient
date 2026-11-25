@@ -5,6 +5,16 @@
 // The fake KV counts writes, because most of these invariants are about what a
 // request must NOT do to the store: a repeat must put nothing, an unkeyed write
 // must not stand, and no write may take a record's first `at` or its decision.
+//
+// What this file is guarding, and what it is not:
+//
+// - The repeat-write demotion is guarded by comparing the stored bytes before and
+//   after a repeat. Against the tree that had the bug (53b5e64) that assertion
+//   fails, and so does "a repeat cannot un-stand a record".
+// - The legacy-reading assertions are not a bug guard. The old count and the old
+//   quote already agreed on a record that had been through loadPrefs; the only
+//   real failure there was the raw shape returned by the repeat path. Those
+//   assertions hold the reading in place rather than prove a repair.
 
 import worker from "../src/worker.js";
 
@@ -69,8 +79,16 @@ async function prefId(text) {
   check("a keyed write stands", created.code === 200 && created.body.pref?.status === "active", created);
   check("a keyed write is one put", created.puts === 1, { puts: created.puts });
 
-  // 2. Repeating the same words changes nothing and writes nothing.
+  // 2. Repeating the same words changes nothing and writes nothing. The bytes are
+  //    compared, not just the response: a demotion rewrites the record, so the
+  //    store is the only place that shows it even when the reply looks harmless.
+  const key = "pref:" + created.body.pref.id;
+  const storedBefore = store.map.get(key);
   const repeat = await call(store, { origin: PAGE, body: { text: "always answer in one line" } });
+  check("a repeat leaves the stored bytes alone", store.map.get(key) === storedBefore, {
+    before: storedBefore,
+    after: store.map.get(key)
+  });
   check("a repeat writes nothing", repeat.puts === 0, { puts: repeat.puts });
   check("a repeat reports the record existed", repeat.body.pref?.existed === true, repeat.body.pref);
   check("a repeat cannot un-stand a record", repeat.body.pref?.status === "active", repeat.body.pref);

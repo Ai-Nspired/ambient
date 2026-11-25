@@ -734,7 +734,15 @@ function allowedOrigin(request, env) {
 __name(allowedOrigin, "allowedOrigin");
 // Records written before kinds existed carry neither field. They are read as what
 // they were, a statement he made, and the store is never rewritten behind his back
-// to say so. One reading, so the quote and the count cannot disagree.
+// to say so.
+//
+// This is a consistency change, not a bug fix. The quote used
+// `(pref.status || "active") === "active"` and the count used
+// `pref.status === "active"`, and they could never disagree in practice: every
+// record reaching either one has already been through loadPrefs, which sets the
+// status. Two readings of one rule is the smell, not a wrong number, so they are
+// one function now. The failure that was real is below, in the repeat return:
+// that path handed back the raw stored shape with no status at all.
 function readPref(record) {
   return Object.assign({}, record, { kind: record.kind || "stated", status: record.status || "active" });
 }
