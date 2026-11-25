@@ -726,9 +726,10 @@ function allowedOrigin(request, env) {
   const origin = String(request.headers.get("origin") || "").replace(/\/$/, "");
   // No Origin is not a browser: CORS cannot gate a server-side caller, and
   // pretending otherwise would only hide that limit.
-  if (!origin) return { ok: true, origin: null };
-  if (origin === here || named.indexOf(origin) >= 0) return { ok: true, origin };
-  return { ok: false, origin: null };
+  if (!origin) return { ok: true, origin: null, delegated: false };
+  if (origin === here) return { ok: true, origin, delegated: false };
+  if (named.indexOf(origin) >= 0) return { ok: true, origin, delegated: true };
+  return { ok: false, origin: null, delegated: false };
 }
 __name(allowedOrigin, "allowedOrigin");
 async function loadPrefs(env) {
@@ -776,9 +777,9 @@ async function savePref(env, text, source = "ambient", actor = "owner", kind = "
   return record;
 }
 __name(savePref, "savePref");
-// The only path that changes a status. A model that wrote a candidate cannot call
-// it: it is reached by the operator's own request and nobody else's.
-async function setPrefStatus(env, id, status) {
+// The only path that changes a status. The rung to active is reached with the
+// operator key; a named page may only move a record to candidate or rejected.
+async function setPrefStatus(env, id, status, by = "owner") {
   const clean = String(id || "").replace(/[^0-9a-f]/g, "").slice(0, 16);
   if (!clean || ["active", "candidate", "rejected"].indexOf(String(status)) < 0) return null;
   const store = env && env.PREFS && typeof env.PREFS.get === "function" && typeof env.PREFS.put === "function" ? env.PREFS : null;
@@ -796,7 +797,7 @@ async function setPrefStatus(env, id, status) {
     id: clean,
     kind: record.kind || "stated",
     status: String(status),
-    decidedBy: "owner",
+    decidedBy: String(by || "owner"),
     decidedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
   await store.put(PREF_PREFIX + clean, JSON.stringify(next));
@@ -2209,7 +2210,18 @@ var worker_default = {
       // Promoting or rejecting is the only way a status changes, and the only way
       // a model-written candidate ever becomes something she is told to follow.
       if (body && body.id) {
-        const next = await setPrefStatus(env, body.id, body.status);
+        if (!env?.OPERATOR_KEY) {
+          const denied = json({ error: { code: "operator_key_unset", message: "Set OPERATOR_KEY before a status can be promoted." } }, 403);
+          if (gate.origin) denied.headers.set("access-control-allow-origin", gate.origin);
+          return denied;
+        }
+        if (String(body.status) === "active" && request.headers.get("x-operator-key") !== env.OPERATOR_KEY) {
+          const denied = json({ error: { code: "operator_key_required", message: "Send the operator key in x-operator-key to make a preference standing." } }, 403);
+          if (gate.origin) denied.headers.set("access-control-allow-origin", gate.origin);
+          return denied;
+        }
+        const by = gate.delegated ? gate.origin : "owner";
+        const next = await setPrefStatus(env, body.id, body.status, by);
         const response = next
           ? json({ ok: true, pref: next })
           : json({ error: { code: "pref_unmatched", message: "Send { id, status } for a stored preference, where status is active, rejected or candidate." } }, 400);
@@ -2218,7 +2230,12 @@ var worker_default = {
       }
       // The kind is the operator's to name: an inference recorded here is kept as a
       // candidate like any other, and never quoted until he promotes it.
-      const saved = await savePref(env, body?.text, "owner", "owner", body?.kind || "stated");
+      const by = gate.delegated ? gate.origin : "owner";
+      const hasKey = Boolean(env?.OPERATOR_KEY) && request.headers.get("x-operator-key") === env.OPERATOR_KEY;
+      const written = await savePref(env, body?.text, by, by, body?.kind || "stated");
+      // Nothing becomes standing without the key, on this branch exactly as on
+      // promotion: a named page's write that would have landed active is held.
+      const saved = written && written.status === "active" && gate.delegated && !hasKey ? await setPrefStatus(env, written.id, "candidate", by) : written;
       const response = saved ? json({ ok: true, pref: saved }) : json({ error: { code: "pref_required", message: "Send { text } and make sure the PREFS binding exists." } }, 400);
       if (gate.origin) response.headers.set("access-control-allow-origin", gate.origin);
       return response;
