@@ -222,9 +222,11 @@ Learning must be traceable, evidence-supported, and consistent with the applicab
 
 Memory Provenance
 
-PREFS is Memoria: what he has stated, in his own words, kept apart from what a model has suggested. Every record carries the kind of claim it is — stated or model_suggested — and its standing — active, candidate or rejected — beside its source, the actor that wrote it, and when.
+PREFS is Memoria: what he has stated, in his own words, kept apart from what a model has suggested. Every record carries the kind of claim it is — stated, model_suggested or inferred — and its standing — active, candidate or rejected — beside its source, the actor that wrote it, and when. Stated is what he said, model_suggested is prose a model wrote, and inferred is a conclusion drawn from what he did or from the context; only what he said arrives standing, and the other two wait for him.
 
 Only standing memory is quoted into a prompt. A preference a model writes down arrives as a candidate, so the model that suggested it cannot promote it by repeating itself. Promotion and rejection are the operator's, one record at a time, through POST /api/prefs with an id and a status. Records written before kinds existed carry neither field and are read as a statement he made — stated, active — normalised on read, never rewritten in the store.
+
+Memory is read only by the pages that carry the dock. This Worker's own origin always may, and any other origin must be named in PREFS_ORIGINS. A caller that sends no Origin header is not a browser at all, and CORS cannot gate it; that limit is stated rather than hidden.
 
 No preference record expires. A preference is a record, not a cache.
 
@@ -250,7 +252,7 @@ Authorization Switch
 
 Authorization is held as state — state:authorization in PREFS — and it is off until the operator turns it on. Off, AA still answers and still remembers, but nothing it concludes becomes ARA's evidence: a verdict is refused as authorization_off, and outcome reports are skipped. A warning is not authorization.
 
-GET /api/authorization reads the state. POST /api/authorization with { on: true } or { on: false } sets it; the body must be a boolean, and when an OPERATOR_KEY is configured the request must carry it in x-operator-key. The state is a record rather than a default, so a deploy does not quietly reset it, and it is the operator's to set.
+GET /api/authorization reads the state. POST /api/authorization with { on: true } or { on: false } sets it; the body must be a boolean, and when an OPERATOR_KEY is configured the request must carry it in x-operator-key. While OPERATOR_KEY is unset the switch cannot be set at all: the route refuses rather than treating a missing secret as an open door. The state is a record rather than a default, so a deploy does not quietly reset it, and it is the operator's to set.
 
 10. Operational Interaction Cycle
 

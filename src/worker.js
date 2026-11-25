@@ -716,6 +716,21 @@ var json = /* @__PURE__ */ __name((body, status = 200) => new Response(JSON.stri
 }), "json");
 var PREF_PREFIX = "pref:";
 var PREF_STATEMENT = /^(from now on|going forward|from here on|always\b|never\b|remember(?: that|:)?\b|my preference is\b|i prefer\b|don'?t ever\b|do not ever\b|stop (?:using|doing|writing|saying)\b)/i;
+// The prefs list is his whole standing memory, and a page that carries the dock is
+// the only kind of caller entitled to read it. The Worker's own origin always is
+// one; any other is named in PREFS_ORIGINS, comma separated. An allowlist that
+// guesses is not an allowlist.
+function allowedOrigin(request, env) {
+  const here = new URL(request.url).origin;
+  const named = String(env?.PREFS_ORIGINS || "").split(",").map((origin) => origin.trim().replace(/\/$/, "")).filter(Boolean);
+  const origin = String(request.headers.get("origin") || "").replace(/\/$/, "");
+  // No Origin is not a browser: CORS cannot gate a server-side caller, and
+  // pretending otherwise would only hide that limit.
+  if (!origin) return { ok: true, origin: null };
+  if (origin === here || named.indexOf(origin) >= 0) return { ok: true, origin };
+  return { ok: false, origin: null };
+}
+__name(allowedOrigin, "allowedOrigin");
 async function loadPrefs(env) {
   if (!env?.PREFS?.list) return [];
   const listed = await env.PREFS.list({ prefix: PREF_PREFIX, limit: 60 }).catch(() => null);
@@ -745,9 +760,15 @@ __name(loadPrefs, "loadPrefs");
 // is recorded as such and never quoted back. The kind and the status are kept
 // beside the words, because the difference is the whole of what makes a memory
 // auditable afterwards.
+var PREF_KINDS = ["stated", "model_suggested", "inferred"];
 async function savePref(env, text, source = "ambient", actor = "owner", kind = "stated", status = kind === "stated" ? "active" : "candidate") {
   const clean = String(text || "").replace(/\s+/g, " ").trim().slice(0, 500);
   if (!clean || !env?.PREFS?.put) return null;
+  // An inferred claim is a conclusion drawn from what he did or from the context,
+  // not something he said and not prose a model wrote. It is kept apart from both
+  // and it is never standing until he makes it so.
+  if (PREF_KINDS.indexOf(String(kind)) < 0) kind = "stated";
+  if (kind === "stated" && status === "candidate") status = "active";
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clean.toLowerCase()));
   const id = [...new Uint8Array(digest)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
   const record = { id, text: clean, kind, status, source, actor, at: (/* @__PURE__ */ new Date()).toISOString() };
@@ -2161,14 +2182,24 @@ var worker_default = {
       });
     }
     if (url.pathname === "/api/prefs" && request.method === "GET") {
+      const gate = allowedOrigin(request, env);
+      if (!gate.ok) return json({ error: { code: "origin_denied", message: "This origin is not on the list that may read his memory." } }, 403);
       const prefs = await loadPrefs(env);
       const standing = prefs.filter((pref) => pref.status === "active").length;
       const candidates = prefs.filter((pref) => pref.status === "candidate").length;
-      const response = json({ prefs, count: prefs.length, standing, candidates });
-      response.headers.set("access-control-allow-origin", "*");
+      const inferred = prefs.filter((pref) => pref.kind === "inferred").length;
+      const response = json({ prefs, count: prefs.length, standing, candidates, inferred });
+      // Named back rather than wildcarded: only an origin on the list is told it may
+      // read this body, and one that is not is not told at all.
+      if (gate.origin) response.headers.set("access-control-allow-origin", gate.origin);
+      response.headers.set("vary", "origin");
       return response;
     }
     if (url.pathname === "/api/prefs" && request.method === "POST") {
+      // A write is the same entitlement as a read: the pages that carry the dock,
+      // and nothing else.
+      const gate = allowedOrigin(request, env);
+      if (!gate.ok) return json({ error: { code: "origin_denied", message: "This origin is not on the list that may write his memory." } }, 403);
       let body;
       try {
         body = await request.json();
@@ -2182,18 +2213,24 @@ var worker_default = {
         const response = next
           ? json({ ok: true, pref: next })
           : json({ error: { code: "pref_unmatched", message: "Send { id, status } for a stored preference, where status is active, rejected or candidate." } }, 400);
-        response.headers.set("access-control-allow-origin", "*");
+        if (gate.origin) response.headers.set("access-control-allow-origin", gate.origin);
         return response;
       }
-      const saved = await savePref(env, body?.text, "owner", "owner");
+      // The kind is the operator's to name: an inference recorded here is kept as a
+      // candidate like any other, and never quoted until he promotes it.
+      const saved = await savePref(env, body?.text, "owner", "owner", body?.kind || "stated");
       const response = saved ? json({ ok: true, pref: saved }) : json({ error: { code: "pref_required", message: "Send { text } and make sure the PREFS binding exists." } }, 400);
-      response.headers.set("access-control-allow-origin", "*");
+      if (gate.origin) response.headers.set("access-control-allow-origin", gate.origin);
       return response;
     }
     
     if (url.pathname === "/api/authorization") {
-      // The switch is the operator's. When a key is configured it is required; when
-      // it is not, this route is no more open than the rest of this Worker's writes.
+      // The switch is the operator's, and the key is what makes that true. An unset
+      // key is not "no gate": it is a gate that cannot be passed, so setting one is
+      // the only way the switch can be moved at all.
+      if (request.method === "POST" && !env?.OPERATOR_KEY) {
+        return json({ error: { code: "operator_key_unset", message: "Set OPERATOR_KEY before the switch can be set." } }, 403);
+      }
       if (env?.OPERATOR_KEY && request.headers.get("x-operator-key") !== env.OPERATOR_KEY) {
         return json({ error: { code: "operator_key_required", message: "Send the operator key in x-operator-key." } }, 403);
       }
