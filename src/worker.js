@@ -772,9 +772,23 @@ async function savePref(env, text, source = "ambient", actor = "owner", kind = "
   if (kind === "stated" && status === "candidate") status = "active";
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clean.toLowerCase()));
   const id = [...new Uint8Array(digest)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+  // A repeat is not a revision. The id is derived from the words, so a write that
+  // lands on an existing key is the same claim said again: the stored record comes
+  // back as it stands — its first at, and any decision already on it — and nothing
+  // is put. Without this, re-sending the text of a standing record demoted it.
+  const held = typeof env.PREFS.get === "function" ? await env.PREFS.get(PREF_PREFIX + id).catch(() => null) : null;
+  if (held) {
+    let prior = null;
+    try {
+      prior = JSON.parse(held);
+    } catch {
+      prior = { text: clean };
+    }
+    return Object.assign({}, prior, { id, existed: true });
+  }
   const record = { id, text: clean, kind, status, source, actor, at: (/* @__PURE__ */ new Date()).toISOString() };
   await env.PREFS.put(PREF_PREFIX + id, JSON.stringify(record));
-  return record;
+  return Object.assign({}, record, { existed: false });
 }
 __name(savePref, "savePref");
 // The only path that changes a status. The rung to active is reached with the
@@ -2234,8 +2248,9 @@ var worker_default = {
       const hasKey = Boolean(env?.OPERATOR_KEY) && request.headers.get("x-operator-key") === env.OPERATOR_KEY;
       const written = await savePref(env, body?.text, by, by, body?.kind || "stated");
       // Nothing becomes standing without the key, whichever origin the write came
-      // from: one that would have landed active is held as a candidate instead.
-      const saved = written && written.status === "active" && !hasKey ? await setPrefStatus(env, written.id, "candidate", by) : written;
+      // from: one that would have landed active is held as a candidate instead. A
+      // repeat never reaches that step: an existing record is returned untouched.
+      const saved = written && written.status === "active" && !written.existed && !hasKey ? await setPrefStatus(env, written.id, "candidate", by) : written;
       const response = saved ? json({ ok: true, pref: saved }) : json({ error: { code: "pref_required", message: "Send { text } and make sure the PREFS binding exists." } }, 400);
       if (gate.origin) response.headers.set("access-control-allow-origin", gate.origin);
       return response;
