@@ -2233,9 +2233,9 @@ var worker_default = {
       const by = gate.delegated ? gate.origin : "owner";
       const hasKey = Boolean(env?.OPERATOR_KEY) && request.headers.get("x-operator-key") === env.OPERATOR_KEY;
       const written = await savePref(env, body?.text, by, by, body?.kind || "stated");
-      // Nothing becomes standing without the key, on this branch exactly as on
-      // promotion: a named page's write that would have landed active is held.
-      const saved = written && written.status === "active" && gate.delegated && !hasKey ? await setPrefStatus(env, written.id, "candidate", by) : written;
+      // Nothing becomes standing without the key, whichever origin the write came
+      // from: one that would have landed active is held as a candidate instead.
+      const saved = written && written.status === "active" && !hasKey ? await setPrefStatus(env, written.id, "candidate", by) : written;
       const response = saved ? json({ ok: true, pref: saved }) : json({ error: { code: "pref_required", message: "Send { text } and make sure the PREFS binding exists." } }, 400);
       if (gate.origin) response.headers.set("access-control-allow-origin", gate.origin);
       return response;
