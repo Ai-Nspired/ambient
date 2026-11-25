@@ -220,6 +220,14 @@ Repeated interaction alone does not establish correctness. A click, selection, o
 
 Learning must be traceable, evidence-supported, and consistent with the applicable memory and truth-management boundaries.
 
+Memory Provenance
+
+PREFS is Memoria: what he has stated, in his own words, kept apart from what a model has suggested. Every record carries the kind of claim it is — stated or model_suggested — and its standing — active, candidate or rejected — beside its source, the actor that wrote it, and when.
+
+Only standing memory is quoted into a prompt. A preference a model writes down arrives as a candidate, so the model that suggested it cannot promote it by repeating itself. Promotion and rejection are the operator's, one record at a time, through POST /api/prefs with an id and a status. Records written before kinds existed carry neither field and are read as a statement he made — stated, active — normalised on read, never rewritten in the store.
+
+No preference record expires. A preference is a record, not a cache.
+
 9. Authority, Authorization, and Safety
 
 Ambient awareness does not confer authority.
@@ -237,6 +245,12 @@ The following boundaries apply:
 AA must not independently redefine ARA's foundational principles, modify master truth, bypass application authorization, or assume control of another system's runtime.
 
 When an intervention requires an operational response, the responsible application and authorization mechanism must govern execution.
+
+Authorization Switch
+
+Authorization is held as state — state:authorization in PREFS — and it is off until the operator turns it on. Off, AA still answers and still remembers, but nothing it concludes becomes ARA's evidence: a verdict is refused as authorization_off, and outcome reports are skipped. A warning is not authorization.
+
+GET /api/authorization reads the state. POST /api/authorization with { on: true } or { on: false } sets it; the body must be a boolean, and when an OPERATOR_KEY is configured the request must carry it in x-operator-key. The state is a record rather than a default, so a deploy does not quietly reset it, and it is the operator's to set.
 
 10. Operational Interaction Cycle
 
@@ -272,6 +286,14 @@ Integration should favor:
 An application should not need to recreate ARA to make AA useful. It should expose the context and capabilities that it is authorized to provide through a defined integration boundary.
 
 Implementation must respect existing infrastructure and ownership. New Workers, services, storage, dependencies, or permissions must not be introduced merely for architectural convenience.
+
+Model and Presets
+
+ARA decides; the pen repeats what she decided. The voice that writes when she returns no text is a paid model named in MODEL — mistralai/mistral-nemo until he picks otherwise — never a :free slug, because a free model's terms let the provider keep the prompt.
+
+A pick in the dock overrides that for every path at once, kept in his own store, and clearing the pick falls back to MODEL. The store reports the models it will actually run — Workers AI ids, OpenRouter ids and its proxy presets — and the dock offers that list instead of a baked-in constant. A preset travels as @preset/<slug>, because OpenRouter does not take a bare slug and would answer with the store's own default instead of the preset he chose.
+
+The pen carries text only. An attached image is not sent to the writer, so nothing here claims to read one.
 
 12. Architectural Objective
 
