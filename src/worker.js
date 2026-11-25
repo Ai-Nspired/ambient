@@ -762,23 +762,41 @@ __name(loadPrefs, "loadPrefs");
 // beside the words, because the difference is the whole of what makes a memory
 // auditable afterwards.
 var PREF_KINDS = ["stated", "model_suggested", "inferred"];
-async function savePref(env, text, source = "ambient", actor = "owner", kind = "stated", status, hold = false) {
+async function savePref(env, text, source = "ambient", actor = "owner", kind = "stated", status = kind === "stated" ? "active" : "candidate", revise = false) {
   const clean = String(text || "").replace(/\s+/g, " ").trim().slice(0, 500);
   if (!clean || !env?.PREFS?.put) return null;
   // An inferred claim is a conclusion drawn from what he did or from the context,
   // not something he said and not prose a model wrote. It is kept apart from both
   // and it is never standing until he makes it so.
   if (PREF_KINDS.indexOf(String(kind)) < 0) kind = "stated";
-  // The default follows the kind the record actually carries, so an unknown kind
-  // lands exactly as it did before: normalised to stated, and standing.
-  if (status === undefined) status = kind === "stated" ? "active" : "candidate";
-  // A caller may ask for a stated preference to be held: it is then written once,
-  // already as a candidate, so no failure between two writes can leave standing.
-  if (kind === "stated" && status === "candidate" && !hold) status = "active";
+  if (kind === "stated" && status === "candidate") status = "active";
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clean.toLowerCase()));
   const id = [...new Uint8Array(digest)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
-  const record = { id, text: clean, kind, status, source, actor, at: (/* @__PURE__ */ new Date()).toISOString() };
-  await env.PREFS.put(PREF_PREFIX + id, JSON.stringify(record));
+  const key = PREF_PREFIX + id;
+  // The id is the words, so writing the same words again lands on the record that
+  // already holds them. It must not rewrite it: a page that can read the list
+  // could otherwise un-stand a preference by sending its text back, and take the
+  // record's first `at` and its decision with it.
+  let prior = null;
+  if (typeof env.PREFS.get === "function") {
+    const raw = await env.PREFS.get(key).catch(() => null);
+    if (raw) {
+      try {
+        prior = JSON.parse(raw);
+      } catch {
+        prior = null;
+      }
+    }
+  }
+  if (prior && !revise) {
+    prior.existed = true;
+    return prior;
+  }
+  const record = { id, text: clean, kind, status, source, actor, at: (prior && prior.at) || (/* @__PURE__ */ new Date()).toISOString() };
+  if (prior && prior.decidedBy) record.decidedBy = prior.decidedBy;
+  if (prior && prior.decidedAt) record.decidedAt = prior.decidedAt;
+  await env.PREFS.put(key, JSON.stringify(record));
+  if (prior) record.existed = true;
   return record;
 }
 __name(savePref, "savePref");
@@ -2237,10 +2255,12 @@ var worker_default = {
       // candidate like any other, and never quoted until he promotes it.
       const by = gate.delegated ? gate.origin : "owner";
       const hasKey = Boolean(env?.OPERATOR_KEY) && request.headers.get("x-operator-key") === env.OPERATOR_KEY;
-      // Nothing becomes standing without the key, whichever origin the write came
-      // from, and it is held in the single write that creates it: there is no
-      // second write, so no window where a failure leaves it standing.
-      const saved = await savePref(env, body?.text, by, by, body?.kind || "stated", hasKey ? undefined : "candidate", true);
+      // Writing the same words again lands on the record that already holds them, so
+      // a page can neither un-stand it nor take its first `at`. A write that creates
+      // a record without the key is held as a candidate in a second write, until
+      // item 1 is ruled and the status can be resolved in one.
+      const written = await savePref(env, body?.text, by, by, body?.kind || "stated", void 0, hasKey);
+      const saved = written && written.status === "active" && !hasKey && !written.existed ? await setPrefStatus(env, written.id, "candidate", by) : written;
       const response = saved ? json({ ok: true, pref: saved }) : json({ error: { code: "pref_required", message: "Send { text } and make sure the PREFS binding exists." } }, 400);
       if (gate.origin) response.headers.set("access-control-allow-origin", gate.origin);
       return response;
