@@ -291,7 +291,7 @@ Model and Presets
 
 ARA decides; the pen repeats what she decided. The voice that writes when she returns no text is a paid model named in MODEL — mistralai/mistral-nemo until he picks otherwise — never a :free slug, because a free model's terms let the provider keep the prompt.
 
-A pick in the dock overrides that for every path at once, kept in his own store, and clearing the pick falls back to MODEL. The store reports the models it will actually run — Workers AI ids, OpenRouter ids and its proxy presets — and the dock offers that list instead of a baked-in constant. A preset travels as @preset/<slug>, because OpenRouter does not take a bare slug and would answer with the store's own default instead of the preset he chose.
+A pick in the dock overrides that for every path at once, kept in his own store, and clearing the pick falls back to MODEL. The store reports the models it will actually run — Workers AI ids, OpenRouter ids and its proxy presets — and the dock offers that list instead of a baked-in constant. A preset travels as @preset/<slug>, because OpenRouter does not take a bare slug.
 
 The pen carries text only. An attached image is not sent to the writer, so nothing here claims to read one.
 
