@@ -143,8 +143,17 @@ async function prefId(text) {
   const promoted = await call(store, { body: { id: "0123456789abcdef", status: "active" } });
   check("promotion without the key is refused", promoted.code === 403 && promoted.body.error?.code === "operator_key_required", promoted);
 
+  // 5c. An unknown kind is refused at the create call site, before anything is
+  //     written, so it cannot become a kind the store then has to protect.
   const bogus = await call(store, { body: { text: "a kind that does not exist", kind: "bogus" }, key: KEY });
-  check("an unknown kind still lands stated", bogus.body.pref?.kind === "stated" && bogus.body.pref?.status === "active", bogus.body.pref);
+  check("an unknown kind is refused", bogus.code === 400 && bogus.body.error?.code === "kind_unknown", bogus);
+  check("a refused kind writes nothing", bogus.puts === 0 && store.map.size === 0, { puts: bogus.puts, records: store.map.size });
+  // The refusal must not narrow what was already allowed: a null kind still means
+  // he stated it, and no text still maps to pref_required.
+  const nullKind = await call(store, { body: { text: "a null kind is still stated", kind: null }, key: KEY });
+  check("a null kind is still stated", nullKind.code === 200 && nullKind.body.pref?.kind === "stated" && nullKind.body.pref?.status === "active", nullKind.body.pref);
+  const empty = await call(store, { body: {}, key: KEY });
+  check("no text still maps to pref_required", empty.code === 400 && empty.body.error?.code === "pref_required", empty);
 }
 
 const failed = results.filter((result) => !result.ok);

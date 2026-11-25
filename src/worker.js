@@ -2259,10 +2259,20 @@ var worker_default = {
         return response;
       }
       // The kind is the operator's to name: an inference recorded here is kept as a
-      // candidate like any other, and never quoted until he promotes it.
+      // candidate like any other, and never quoted until he promotes it. A kind that
+      // is not one of those names is refused here, before anything is written,
+      // rather than quietly becoming "stated": the kind is what makes the memory
+      // auditable afterwards, and a typo is not the operator naming one. A kind that
+      // is absent or null still means he stated it.
+      const requestedKind = body?.kind;
+      if (requestedKind !== undefined && requestedKind !== null && String(requestedKind) !== "" && PREF_KINDS.indexOf(String(requestedKind)) < 0) {
+        const refused = json({ error: { code: "kind_unknown", message: "Send kind as one of stated, model_suggested or inferred." } }, 400);
+        if (gate.origin) refused.headers.set("access-control-allow-origin", gate.origin);
+        return refused;
+      }
       const by = gate.delegated ? gate.origin : "owner";
       const hasKey = Boolean(env?.OPERATOR_KEY) && request.headers.get("x-operator-key") === env.OPERATOR_KEY;
-      const written = await savePref(env, body?.text, by, by, body?.kind || "stated");
+      const written = await savePref(env, body?.text, by, by, requestedKind || "stated");
       // Nothing becomes standing without the key, whichever origin the write came
       // from: one that would have landed active is held as a candidate instead. A
       // repeat never reaches that step: an existing record is returned untouched.
