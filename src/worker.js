@@ -762,14 +762,19 @@ __name(loadPrefs, "loadPrefs");
 // beside the words, because the difference is the whole of what makes a memory
 // auditable afterwards.
 var PREF_KINDS = ["stated", "model_suggested", "inferred"];
-async function savePref(env, text, source = "ambient", actor = "owner", kind = "stated", status = kind === "stated" ? "active" : "candidate") {
+async function savePref(env, text, source = "ambient", actor = "owner", kind = "stated", status, hold = false) {
   const clean = String(text || "").replace(/\s+/g, " ").trim().slice(0, 500);
   if (!clean || !env?.PREFS?.put) return null;
   // An inferred claim is a conclusion drawn from what he did or from the context,
   // not something he said and not prose a model wrote. It is kept apart from both
   // and it is never standing until he makes it so.
   if (PREF_KINDS.indexOf(String(kind)) < 0) kind = "stated";
-  if (kind === "stated" && status === "candidate") status = "active";
+  // The default follows the kind the record actually carries, so an unknown kind
+  // lands exactly as it did before: normalised to stated, and standing.
+  if (status === undefined) status = kind === "stated" ? "active" : "candidate";
+  // A caller may ask for a stated preference to be held: it is then written once,
+  // already as a candidate, so no failure between two writes can leave standing.
+  if (kind === "stated" && status === "candidate" && !hold) status = "active";
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clean.toLowerCase()));
   const id = [...new Uint8Array(digest)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
   const record = { id, text: clean, kind, status, source, actor, at: (/* @__PURE__ */ new Date()).toISOString() };
@@ -2232,10 +2237,10 @@ var worker_default = {
       // candidate like any other, and never quoted until he promotes it.
       const by = gate.delegated ? gate.origin : "owner";
       const hasKey = Boolean(env?.OPERATOR_KEY) && request.headers.get("x-operator-key") === env.OPERATOR_KEY;
-      const written = await savePref(env, body?.text, by, by, body?.kind || "stated");
       // Nothing becomes standing without the key, whichever origin the write came
-      // from: one that would have landed active is held as a candidate instead.
-      const saved = written && written.status === "active" && !hasKey ? await setPrefStatus(env, written.id, "candidate", by) : written;
+      // from, and it is held in the single write that creates it: there is no
+      // second write, so no window where a failure leaves it standing.
+      const saved = await savePref(env, body?.text, by, by, body?.kind || "stated", hasKey ? undefined : "candidate", true);
       const response = saved ? json({ ok: true, pref: saved }) : json({ error: { code: "pref_required", message: "Send { text } and make sure the PREFS binding exists." } }, 400);
       if (gate.origin) response.headers.set("access-control-allow-origin", gate.origin);
       return response;
