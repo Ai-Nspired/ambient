@@ -27,9 +27,10 @@
     // paid model because a free one's terms let the provider keep the prompt.
     "MODEL": "mistralai/mistral-nemo",
     // Which pages may read or write his memory besides this Worker's own origin.
-    // Empty is the strict reading: only the dock served from here, and anything
-    // else that should reach it is named deliberately.
-    "PREFS_ORIGINS": "",
+    // The card surface is the one that does: both names it answers to, because a
+    // browser sends whichever one the operator is on. Anything else is named here
+    // deliberately, never wildcarded.
+    "PREFS_ORIGINS": "https://cods.nspired.cc,https://cods.ai-n.workers.dev",
     "ACCENT": "#4a9eff"
   },
   // The store the cards page reads before it asks her. Bound the way the cards
