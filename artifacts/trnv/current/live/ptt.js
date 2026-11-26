@@ -1206,8 +1206,12 @@ let focused = null;
 const PASS_VERSION = 'pulse-2';
 if (store.get('trnv.pass.run', '') !== PASS_VERSION) {
   store.set('trnv.pass.run', PASS_VERSION);
-  store.set('trnv.onboarded', 'no');
-  store.set('trnv.pass', 'on');
+  // A new pass asks a device that read an older one — but a deliberate "off" outranks
+  // any stamp: switching the pass off is the operator's decision, not a version's.
+  if (store.get('trnv.pass', 'on') !== 'off') {
+    store.set('trnv.onboarded', 'no');
+    store.set('trnv.pass', 'on');
+  }
 }
 let onboarded = store.get('trnv.onboarded', '') === 'yes';
 
@@ -1263,6 +1267,27 @@ function drawSlots(apps) {
 // button would have made Music a copy of this file's press; at the panel there is one
 // gate, one soft pulse, one hard pulse and one lit tile, whichever slot it is. What a
 // slot then does is `pressSlot`'s, and Music's lens opens underneath it as before.
+// An alert lights the thing it is about, not only the middle of the wheel: whatever is
+// asking for attention is what glows.
+const alertStyle = document.createElement('style');
+alertStyle.textContent = `
+  .alert { animation: alertFlash 1.7s ease-out; }
+  @keyframes alertFlash {
+    0%, 100% { box-shadow: none; }
+    18% { box-shadow: 0 0 0 1px var(--lit) inset, 0 0 28px -6px var(--lit); border-color: var(--lit); }
+    62% { box-shadow: 0 0 0 1px var(--lit) inset, 0 0 18px -8px var(--lit); border-color: var(--lit); }
+  }
+`;
+document.head.appendChild(alertStyle);
+
+function alertOn(element) {
+  if (!element) return;
+  element.classList.remove('alert');
+  void element.offsetWidth;
+  element.classList.add('alert');
+  setTimeout(() => element.classList.remove('alert'), 1700);
+}
+
 // A press on a slot is a pulse too: the tile keeps time under the thumb for as long as
 // the finger is there, so the four buttons beat like the middle of the wheel does.
 const tileStyle = document.createElement('style');
@@ -1300,6 +1325,7 @@ slotsEl.addEventListener(
       event.preventDefault();
       event.stopImmediatePropagation();
       haptics.error();
+      alertOn(event.target && event.target.closest ? event.target.closest('.slot') : null);
       setStatus('Pulse first.');
       speak('Pulse first');
       return;
@@ -1442,13 +1468,17 @@ buildPad();
 // afterwards: who is speaking, what she is for, and what ambient does not mean.
 const PULSE_SAYS = 'I am an ambient assistant. In the system you will know me as your Pulse — think of me as your pulse, your pulse into the system. I do not tell you how to make pancakes. I just like the way they taste. Sometimes.';
 
+// What the page says once the pass is off. Deliberately not page one of the pass: pressing
+// the slot afterwards must never look like the onboarding started again.
+const PULSE_REST = 'Pulse — your pulse into the system. Hold the dial and I will take it from there.';
+
 const ONBOARD = [
   { line: PULSE_SAYS },
+  { line: 'This is the onboarding. Tap briefly and nothing happens; hold a moment and the page turns.' },
   { line: 'The pulse keeps track of what you prefer, so you do not have to say it twice.' },
   { line: 'The circle in the middle of the wheel is that pulse. Your thumb is already there, and it beats when the wheel has something to say.' },
   { line: 'Two answers before words. One long beat is yes.', answer: 'yes' },
   { line: 'Two quick beats is no.', answer: 'no' },
-  { line: 'This is the onboarding. Tap briefly and nothing happens; hold a moment and the page turns.' },
   { line: 'Hold the dial and say a short message. Pulse takes it first, and logs what you want.' },
   { line: 'If it gets it wrong, correct it: the correction is logged too, and the logs are read before every interaction. That is the loop.' },
   { line: 'It gets better with you, and you with it. That is what symbiotic means.' },
@@ -1535,14 +1565,14 @@ function intakeLine() {
   ].join(' · ');
 }
 
-/** The post, whenever the slot is pressed after the first pass: who she is, and what she holds. */
+/** The slot pressed after the pass: who she is, and what the page is holding. */
 function showPulse() {
   cardEl.classList.add('live');
   questionEl.textContent = 'Pulse';
   metaEl.textContent = intakeLine();
   setOptions([]);
-  typeInto(answerEl, PULSE_SAYS);
-  speak(PULSE_SAYS);
+  typeInto(answerEl, PULSE_REST);
+  speak(PULSE_REST);
   setStatus(`Pulse${hint(' · hold the dial to ask it something')}`);
 }
 
@@ -1682,6 +1712,7 @@ async function pressSlot(slug) {
     paintPad();
   } catch (error) {
     haptics.error();
+    alertOn(cardEl);
     setStatus('Offline: ' + (error && error.message ? error.message : 'failed'));
   }
 }
@@ -1726,5 +1757,5 @@ if (pulseFirst()) {
   // Nothing is owed, so the page says who is behind it and then behaves like the system:
   // hold the dial and what he says goes to Pulse.
   questionEl.textContent = 'Pulse';
-  answerEl.textContent = 'Your pulse into the system. Hold the dial and I will take it from there.';
+  answerEl.textContent = PULSE_REST;
 }

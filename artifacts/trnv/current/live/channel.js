@@ -205,6 +205,12 @@ function build() {
     #chan .seat .keep:hover, #chan .seat .keep:focus-visible { color: var(--lit); border-color: var(--lit) }
     #chan .seat .cut:hover, #chan .seat .cut:focus-visible { color: #f4511e; border-color: #f4511e }
     #chan .seat.cutting { opacity: .4 }
+    #chan.alert { animation: chanAlert 1.8s ease-out; }
+    @keyframes chanAlert {
+      0%, 100% { box-shadow: none; }
+      20% { box-shadow: 0 0 0 1px var(--lit) inset, 0 0 24px -8px var(--lit); }
+      60% { box-shadow: 0 0 0 1px var(--lit) inset, 0 0 16px -10px var(--lit); }
+    }
   `;
   dial.insertAdjacentElement('afterend', strip);
   dial.insertAdjacentElement('afterend', style);
@@ -473,6 +479,15 @@ function askForSound() {
 
 // One row a clip: start it, or take it off the station. Rebuilt whole, because a tray
 // is a handful of rows and the order is what matters, not the identity of a node.
+/** The strip is what glows when something lands on this frequency. */
+function alertStrip() {
+  if (!strip || !fresh.length) return;
+  strip.classList.remove('alert');
+  void strip.offsetWidth;
+  strip.classList.add('alert');
+  setTimeout(() => strip.classList.remove('alert'), 1800);
+}
+
 function paintTray() {
   if (!tray || !trayList) return;
   trayList.textContent = '';
@@ -613,6 +628,8 @@ async function poll() {
     if (fresh.length) {
       inbox.push(...fresh);
       while (inbox.length > MAX_TRAY) inbox.shift();
+      // A clip arriving is an alert, and the alert is the strip it arrived on.
+      alertStrip();
       paintTray();
       note(fresh.length > 1 ? `${fresh.length} waiting` : 'received');
       // One clip landing alone plays as it lands. Several at once are laid out instead:
