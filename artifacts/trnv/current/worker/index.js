@@ -26,7 +26,9 @@ const json = (body, status) =>
 const APPS = [
   { id: 'app-cards', slug: 'cards', title: 'Cards', kind: 'card', entry: null, speaks: 1 },
   { id: 'app-music', slug: 'music', title: 'Music', kind: 'local', entry: null, speaks: 1 },
-  { id: 'app-transcribe', slug: 'transcribe', title: 'Transcribe', kind: 'local', entry: '/api/ptt', speaks: 1 },
+  // MSG is the frequency: the strip, the clips waiting on it, the key that holds it.
+  // `local` because the page owns that surface — the Worker only stores the clips.
+  { id: 'app-msg', slug: 'msg', title: 'MSG', kind: 'local', entry: null, speaks: 1 },
   { id: 'app-assistant', slug: 'assistant', title: 'Assistant', kind: 'ask', entry: '/api/ask', speaks: 1 },
 ];
 

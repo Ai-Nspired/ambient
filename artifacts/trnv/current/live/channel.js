@@ -13,7 +13,8 @@
 // What arrives is also laid out, one row a clip, because a clip that starts while
 // another is playing is two voices on top of each other. One clip landing alone still
 // plays as it lands; several landing together wait in the tray where each can be
-// started, and taken off the station, on its own.
+// started, saved to the device, or taken off the station, on its own. Saving is the
+// default way to keep one: the station forgets after a week, the device does not.
 
 const CHANNEL_KEY = 'trnv.channel';
 const ON_KEY = 'trnv.channel.on';
@@ -185,10 +186,13 @@ function build() {
       gap: 9px; justify-content: flex-start; padding: 5px 9px; font-size: 11px;
       letter-spacing: .08em; font-variant-numeric: tabular-nums }
     #chan .seat .say .mark { font-size: 10px; color: var(--dim); width: 9px }
-    #chan .seat .cut { padding: 5px 9px; line-height: 1; font-size: 12px; color: var(--dim) }
+    #chan .seat .cut, #chan .seat .keep { padding: 5px 9px; line-height: 1; font-size: 12px; color: var(--dim) }
     #chan .seat.playing .say, #chan .seat.playing .say .mark { color: var(--lit); border-color: var(--lit) }
+    #chan .seat .keep:hover, #chan .seat .keep:focus-visible { color: var(--lit); border-color: var(--lit) }
     #chan .seat .cut:hover, #chan .seat .cut:focus-visible { color: #f4511e; border-color: #f4511e }
     #chan .seat.cutting { opacity: .4 }
+    /* The MSG slot lifts the tray out of the strip: same clips, more of them at once. */
+    #chan.board #chanTray { max-height: 56vh }
   `;
   dial.insertAdjacentElement('afterend', strip);
   dial.insertAdjacentElement('afterend', style);
@@ -418,6 +422,26 @@ const clockOf = (at) => {
   return `${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
 };
 
+// A clip on the station is a clip on a lease. Saved to the device it is his, whatever
+// the station does next week, so the tray offers the file as well as the delete.
+const CLIP_KINDS = [['wav', 'wav'], ['mpeg', 'mp3'], ['mp3', 'mp3'], ['ogg', 'ogg'], ['mp4', 'm4a'], ['aac', 'aac']];
+
+function saveClip(clip, button) {
+  if (!clip || !clip.audio) return;
+  const mime = String(clip.mime || 'audio/webm');
+  const known = CLIP_KINDS.find(([needle]) => mime.includes(needle));
+  const url = URL.createObjectURL(new Blob([bytesOf(clip.audio)], { type: mime }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `trnv-${station}-${clockOf(clip.at).replace(/:/g, '')}.${known ? known[1] : 'webm'}`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 20000);
+  if (button) button.classList.add('kept');
+  note('saved to this device');
+}
+
 let armedForSound = false;
 
 function askForSound() {
@@ -458,6 +482,13 @@ function paintTray() {
       playClip(clip);
     });
 
+    const keep = document.createElement('button');
+    keep.type = 'button';
+    keep.className = 'keep';
+    keep.textContent = '↓';
+    keep.setAttribute('aria-label', `Save the clip from ${clockOf(clip.at)} to this device`);
+    keep.addEventListener('click', () => saveClip(clip, keep));
+
     const cut = document.createElement('button');
     cut.type = 'button';
     cut.className = 'cut';
@@ -465,7 +496,7 @@ function paintTray() {
     cut.setAttribute('aria-label', `Delete the clip from ${clockOf(clip.at)}`);
     cut.addEventListener('click', () => cutClip(clip, row));
 
-    row.append(say, cut);
+    row.append(say, keep, cut);
     trayList.append(row);
   }
   tray.classList.toggle('on', inbox.length > 0);

@@ -253,6 +253,8 @@ function pushCard(next) {
   if (!next) return;
   card = next;
   stack.push(next);
+  cardShowing = 0;   // a new card is the one in front
+
   questionEl.textContent = next.question || next.chosen || '—';
   answerEl.textContent = next.answer || '(no answer)';
   cardEl.classList.add('live');
@@ -1133,6 +1135,52 @@ function drawSlots(apps) {
   }
 }
 
+// The Cards slot is the stack itself: a press steps back through the cards this session
+// made, newest first, and puts that card back in front so its options are the wheel's
+// again. Nobody has to remember what she said two asks ago.
+let cardShowing = 0;
+
+function showCardStack() {
+  if (!stack.length) {
+    questionEl.textContent = 'Cards';
+    answerEl.textContent = 'No cards yet. Hold the dial and ask something.';
+    cardEl.classList.add('live');
+    setOptions([]);
+    setStatus('No cards yet.');
+    speak('No cards');
+    return;
+  }
+  cardShowing = Math.min(cardShowing + 1, stack.length);
+  const entry = stack[stack.length - cardShowing];
+  card = entry;
+  questionEl.textContent = entry.question || entry.chosen || '—';
+  answerEl.textContent = entry.answer || '(no answer)';
+  cardEl.classList.add('live');
+  renderMeta(entry);
+  setOptions(entry.options);
+  cardEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  setStatus(`Card ${stack.length - cardShowing + 1} of ${stack.length}`);
+  speak(entry.answer || '');
+}
+
+// The message board is the frequency strip's tray, lifted out of the page: the same
+// clips, more of them at once, and the strip scrolled to. The strip owns the clips, so
+// this only says which of its two sizes to be.
+function openBoard() {
+  const strip = document.getElementById('chan');
+  if (!strip) {
+    setStatus('No message board on this page.');
+    return;
+  }
+  const opening = !strip.classList.contains('board');
+  strip.classList.toggle('board', opening);
+  strip.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const stationEl = document.getElementById('chanMark');
+  const at = stationEl ? stationEl.textContent : '';
+  setStatus(opening ? `Message board · ${at}` : 'Message board closed');
+  speak(at);
+}
+
 async function pressSlot(slug) {
   haptics.pulse('hard');
   try {
@@ -1149,8 +1197,12 @@ async function pressSlot(slug) {
     }
     focused = slug;
     const title = data.focus && data.focus.title ? data.focus.title : slug;
-    setStatus(`${title} in front`);
-    speak(title);
+    if (slug === 'cards') showCardStack();
+    else if (slug === 'msg') openBoard();
+    else {
+      setStatus(`${title} in front`);
+      speak(title);
+    }
     drawSlotsFromBank();
   } catch (error) {
     haptics.error();
