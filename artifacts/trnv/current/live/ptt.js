@@ -765,6 +765,12 @@ function beginHold() {
   if (kill.holding) return;
   haptics.hold();
 
+  // Pulse in front: a hold is its first pass, a line at a time, not the microphone.
+  if (focused === 'pulse') {
+    stepOnboarding();
+    return;
+  }
+
   // Her options make the wheel a menu, and a menu's hold is not the microphone. It puts
   // the stop dial away if a kill parked the wheel there, and otherwise says where the
   // wheel is standing. Nothing is sent and nothing is asked.
@@ -1105,12 +1111,10 @@ function drawSlots(apps) {
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = app ? app.title : 'assign';
-    const under = document.createElement('span');
-    under.className = 'under';
+    // The second face stays a hold away: a tile shows the name and nothing under it.
     const face = app && bank ? bank.face(app.slug) : null;
-    under.textContent = face ? face.second : '';
-    button.append(num, name, under);
-    button.setAttribute('aria-label', app ? `${app.title}. Press to open, hold for ${under.textContent}.` : `Slot ${i + 1} is empty.`);
+    button.append(num, name);
+    button.setAttribute('aria-label', app ? `${app.title}. Press to open, hold for ${face ? face.second : 'its second face'}.` : `Slot ${i + 1} is empty.`);
 
     if (app) {
       let timer = null;
@@ -1121,7 +1125,7 @@ function drawSlots(apps) {
         clearTimeout(timer);
         timer = setTimeout(() => {
           held = true;
-          holdSlot(app.slug, under);
+          holdSlot(app.slug, null);
         }, SLOT_HOLD_MS);
       });
       const release = () => {
@@ -1181,6 +1185,76 @@ function openBoard() {
   speak(at);
 }
 
+// Pulse's first pass. It is the first interaction with the system, so the press puts it
+// in front and a hold walks it forward a line at a time: typed on the card, at the speed
+// of reading, with a pulse as each line lands. Nothing is asked and nothing is sent.
+const ONBOARD = [
+  'Pulse is the system. A pulse comes first; the words are on the card.',
+  'Hold the dial and speak. What you say becomes the card in front of you.',
+  'Turn the wheel to walk what it offers. Press to take one.',
+  'The dot on the rim is the kill: a finger on it, a full circle.',
+  'Haptics and voice are the two switches at the top of the page.',
+  'Four slots: Pulse, Music, MSG, Settings. MSG is a frequency two phones tune to.',
+];
+
+let onboardStep = 0;
+let typingTimer = 0;
+
+function typeInto(el, text) {
+  clearTimeout(typingTimer);
+  if (!el) return;
+  el.textContent = '';
+  let at = 0;
+  const step = () => {
+    if (at >= text.length) return;
+    at += 1;
+    el.textContent = text.slice(0, at);
+    typingTimer = setTimeout(step, 18);
+  };
+  step();
+}
+
+function showPulse() {
+  onboardStep = 0;
+  cardEl.classList.add('live');
+  questionEl.textContent = 'Pulse';
+  answerEl.textContent = 'Hold the dial to start.';
+  metaEl.textContent = '';
+  setOptions([]);
+  setStatus('Pulse · hold the dial to start.');
+  speak('Hold the dial to start');
+}
+
+function stepOnboarding() {
+  if (!ONBOARD.length) return;
+  const line = ONBOARD[Math.min(onboardStep, ONBOARD.length - 1)];
+  onboardStep += 1;
+  questionEl.textContent = `Pulse · ${onboardStep} of ${ONBOARD.length}`;
+  cardEl.classList.add('live');
+  haptics.pulse('soft');
+  typeInto(answerEl, line);
+  speak(line);
+  setStatus(onboardStep >= ONBOARD.length ? 'Its own language comes next.' : 'Pulse · hold for the next line.');
+}
+
+// Settings is what it knows about its own state, on the card: the two switches and the
+// frequency the strip is holding. It is a reading, not a second set of controls.
+function showSettings() {
+  const stationEl = document.getElementById('chanMark');
+  const bits = [
+    `voice ${voiceOn ? 'on' : 'off'}`,
+    `haptics ${feelOn ? 'on' : 'off'}`,
+    `station ${stationEl ? stationEl.textContent : '—'}`,
+  ];
+  cardEl.classList.add('live');
+  questionEl.textContent = 'Settings';
+  answerEl.textContent = bits.join(' · ');
+  metaEl.textContent = '';
+  setOptions([]);
+  setStatus('Settings');
+  speak(bits.join(', '));
+}
+
 async function pressSlot(slug) {
   haptics.pulse('hard');
   try {
@@ -1199,6 +1273,8 @@ async function pressSlot(slug) {
     const title = data.focus && data.focus.title ? data.focus.title : slug;
     if (slug === 'cards') showCardStack();
     else if (slug === 'msg') openBoard();
+    else if (slug === 'pulse') showPulse();
+    else if (slug === 'settings') showSettings();
     else {
       setStatus(`${title} in front`);
       speak(title);

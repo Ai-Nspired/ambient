@@ -23,13 +23,15 @@ const json = (body, status) =>
 
 // The four slots, in the order the panel draws them. `kind` is what the app is:
 // `card` speaks through her, `local` runs in the page, `ask` is her directly.
+// Pulse is first because it is the first interaction with the system: a press puts it
+// in front, a hold walks its first pass. MSG is the frequency: the strip, the clips
+// waiting on it, the key that holds it, kept `local` because the page owns that surface
+// and the Worker only stores the clips.
 const APPS = [
-  { id: 'app-cards', slug: 'cards', title: 'Cards', kind: 'card', entry: null, speaks: 1 },
+  { id: 'app-pulse', slug: 'pulse', title: 'Pulse', kind: 'ask', entry: '/api/ask', speaks: 1 },
   { id: 'app-music', slug: 'music', title: 'Music', kind: 'local', entry: null, speaks: 1 },
-  // MSG is the frequency: the strip, the clips waiting on it, the key that holds it.
-  // `local` because the page owns that surface — the Worker only stores the clips.
   { id: 'app-msg', slug: 'msg', title: 'MSG', kind: 'local', entry: null, speaks: 1 },
-  { id: 'app-assistant', slug: 'assistant', title: 'Assistant', kind: 'ask', entry: '/api/ask', speaks: 1 },
+  { id: 'app-settings', slug: 'settings', title: 'Settings', kind: 'local', entry: null, speaks: 1 },
 ];
 
 const appFor = (slug) => APPS.find((app) => app.slug === String(slug || '')) || null;
