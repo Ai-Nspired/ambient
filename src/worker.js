@@ -535,11 +535,17 @@ ${documents}` };
       (message, index) => index === messages.length - 1 && unread.length ? { role: message.role, content: [{ type: "text", text: message.content }, ...unread.map((url) => ({ type: "image_url", image_url: { url } }))] } : message
     );
     try {
-      const upstream = await fetch("https://orproxy.ai-n.workers.dev/api/chat", {
+      const binding = env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
+      if (!binding) {
+        return json({ error: { code: "proxy_unbound", message: "AI_PROXY binding is missing; the picture cannot be read." } }, 502);
+      }
+      // Over the binding, not the workers.dev hostname: ambient and orproxy share a
+      // zone, and Cloudflare refuses that fetch with 1042.
+      const upstream = await binding.fetch(new Request("https://ai-proxy/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: visionModel, messages: parts })
-      });
+      }));
       const raw = await upstream.text().catch(() => "");
       let data2 = null;
       try {
@@ -548,7 +554,7 @@ ${documents}` };
         data2 = null;
       }
       if (!upstream.ok) {
-        return json({ error: { code: "upstream_error", message: `orproxy ${upstream.status}: ${raw.slice(0, 200)}` } }, 502);
+        return json({ error: { code: "upstream_error", message: `ai-proxy ${upstream.status}: ${raw.slice(0, 200)}` } }, 502);
       }
       const parsed2 = extractPrefs(String(data2?.text || ""));
       for (const preference of parsed2.learned) {

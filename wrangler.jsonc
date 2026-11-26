@@ -9,7 +9,10 @@
     // The dock is ARA's extension, so her pass runs here before anything is
     // generated — over a binding, because a workers.dev Worker may not fetch
     // another workers.dev hostname (Cloudflare 1042).
-    { "binding": "ARA", "service": "ara" }
+    { "binding": "ARA", "service": "ara" },
+    // The vision model lives behind ai-proxy, whose key is already bound there.
+    // Reached over a binding for the same 1042 reason as above.
+    { "binding": "AI_PROXY", "service": "ai-proxy" }
   ],
   "kv_namespaces": [
     // His preferences and intentions: read before every answer, written when he
@@ -19,6 +22,7 @@
   "vars": {
     "UPSTREAM": "https://mind.ai-n.workers.dev/api/assist",
     "MODEL": "openai/gpt-4o-mini",
+    "VISION_MODEL": "nex-agi/nex-n2.5-mini",
     "ACCENT": "#4a9eff"
   }
 }
