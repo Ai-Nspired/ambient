@@ -919,7 +919,8 @@ dial.addEventListener('pointermove', (event) => {
     // Both channels, always: this phone swallows short pulses even when it answers the
     // call, and a detent that is neither felt nor heard is a detent that never happened.
     haptics.pulse(tick.tier);
-    tone.tick(tick.tier);
+    // The beep is the motor's other voice: haptics off is silence, not one channel of two.
+    if (feelOn) tone.tick(tick.tier);
   }
   paintWheel();
 
@@ -937,7 +938,7 @@ dial.addEventListener('pointermove', (event) => {
   // between, so the list's shape is felt instead of counted.
   const tier = pulseTier(index, options.length);
   haptics.pulse(tier);
-  tone.tick(tier);
+  if (feelOn) tone.tick(tier);
   render();
   settle();
 });
@@ -1036,7 +1037,14 @@ function paintSwitches() {
   // The state, not a verb: a switch that reads "voice off" while it is on is the whole
   // reason the first switch read backwards.
   voiceBtn.setAttribute('aria-pressed', String(voiceOn));
-  voiceBtn.textContent = voiceOn ? 'voice on' : 'voice off';
+  if (!('speechSynthesis' in window)) {
+    // A phone with no speech of its own must not be told the voice is on.
+    voiceBtn.textContent = 'no voice';
+    voiceBtn.disabled = true;
+    voiceBtn.title = 'This browser has no speech it can reach.';
+  } else {
+    voiceBtn.textContent = voiceOn ? 'voice on' : 'voice off';
+  }
   feelBtn.setAttribute('aria-pressed', String(feelOn));
   feelBtn.textContent = feelOn ? 'haptics on' : 'haptics off';
   if (!haptics.available) {
@@ -1112,7 +1120,7 @@ if (motorEl) {
     if (name === 'hold') haptics.hold();
     else haptics.pulse(name);
     tone.resume();
-    tone.tick(name === 'hard' ? 'hard' : 'medium');
+    if (feelOn) tone.tick(name === 'hard' ? 'hard' : 'medium');
     motorEl.textContent = `test: ${name} · ${(PATTERNS[name] || []).join('+')} ms`;
   });
 }
@@ -1123,7 +1131,7 @@ function takeStop() {
   reader.lift();
   if (slot == null) return;
   haptics.pulse('medium');
-  tone.tick('medium');
+  if (feelOn) tone.tick('medium');
   setStatus(`Stop ${slot} — ${reader.steps().length} of ${RULES.combination}`);
   paintWheel();
   armIfPerformed();
@@ -1415,12 +1423,10 @@ const ONBOARD = [
   { line: 'Two answers before words. One long beat is yes.', answer: 'yes' },
   { line: 'Two quick beats is no.', answer: 'no' },
   { line: 'Hold the dial anywhere and speak. A short message is enough: one thought, one sentence.' },
-  { line: 'Turn the wheel and the station moves. That number is the frequency you are on.' },
+  { line: 'Turn the wheel to 443.0. I keep a frequency there for you, and the tray under the strip is what is recorded on it.', tuneTo: '443.0' },
   { line: 'Your key is who can hear you: everyone on this frequency who holds the same key hears what you hold down and say. With no key, nothing leaves this device.' },
   { line: 'Every recording is kept on your device. The tray under the strip can save one out to the device, or delete it. The clips are yours to keep or drop.' },
-  { line: 'What you say becomes the card in front of you. The Cards slot walks the cards this session has made, newest first.' },
   { line: 'Settings holds voice, haptics, tips and this first pass. Each one can be turned off, and turned back on.' },
-  { line: 'Pulse takes the work ARA did: it takes in what you prefer and what you mean, keeps explicit intent explicit, and that is the learning loop.' },
   { line: 'The dot on the rim is the kill: a finger on it, a full circle.' },
   { line: 'Four slots: Pulse, Music, Cards, Settings. Pulse is the one that explains the rest.' },
 ];
@@ -1451,6 +1457,32 @@ function showOnboardPrompt() {
   setOptions([]);
   setStatus('Pulse first · press it, or touch the middle.');
   speak('Press Pulse to start');
+}
+
+// One step asks him to land somewhere specific, so the arrival is read off the strip's own
+// mark rather than guessed from the gesture that got him there.
+let tuneWatch = null;
+
+function stopTuneWatch() {
+  if (tuneWatch) tuneWatch.disconnect();
+  tuneWatch = null;
+}
+
+function watchTune(step) {
+  stopTuneWatch();
+  const mark = document.getElementById('chanMark');
+  if (!mark) return;
+  const arrived = () => {
+    if ((mark.textContent || '').trim() !== step.tuneTo) return;
+    stopTuneWatch();
+    haptics.yes();
+    setStatus('You found it.');
+    answerEl.textContent = `You found ${step.tuneTo} — that is the frequency I keep for you. Whatever is recorded there waits in the tray under the strip.`;
+    speak(answerEl.textContent);
+  };
+  tuneWatch = new MutationObserver(arrived);
+  tuneWatch.observe(mark, { childList: true, characterData: true, subtree: true });
+  arrived();
 }
 
 /** The first pass is owed only on a page that has not been through it, with the pass on. */
@@ -1501,10 +1533,14 @@ function advanceOnboarding() {
   else haptics.pulse('soft');
   typeInto(answerEl, step.line);
   speak(step.line);
+  // A step can name a station to find; the rest of the pass waits for him to arrive.
+  if (step.tuneTo) watchTune(step);
+  else stopTuneWatch();
   setStatus(onboardStep >= ONBOARD.length ? 'Press Pulse once more to finish.' : 'Press Pulse for the next line.');
 }
 
 function endOnboarding() {
+  stopTuneWatch();
   onboarded = true;
   store.set('trnv.onboarded', 'yes');
   onboardStep = 0;
@@ -1559,6 +1595,8 @@ function applySetting(choice) {
   } else if (name.startsWith('voice')) {
     voiceOn = on;
     store.set('trnv.voice', voiceOn ? 'on' : 'off');
+    // Nothing already queued may speak after the switch says off.
+    if (!voiceOn && 'speechSynthesis' in window) speechSynthesis.cancel();
     paintSwitches();
   } else if (name.startsWith('haptics')) {
     feelOn = on;
