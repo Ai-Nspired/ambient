@@ -74,6 +74,9 @@ let feelOn = store.get('trnv.feel', 'on') !== 'off';
 // The card's own menu item: list what kind of ask it was, or keep it silent.
 // Silent by default — the answer is the message; the label is for when he asks.
 let metaMode = store.get('trnv.meta', 'silent') === 'listed' ? 'listed' : 'silent';
+// Tips are the half of a status line that tells him what to do next. Settings turns
+// them off for a hand that already knows.
+let tipsOn = store.get('trnv.tips', 'on') !== 'off';
 const haptics = createHaptics({ enabled: feelOn });
 
 let options = [];
@@ -120,6 +123,11 @@ function enqueue(said) {
 
 function setStatus(text) {
   statusEl.textContent = text;
+}
+
+/** The instructive half of a status line, or nothing when tips are off. */
+function hint(text) {
+  return tipsOn ? text : '';
 }
 
 /* ------------------------------------------------------------------- drawing */
@@ -1126,58 +1134,67 @@ function drawSlots(apps) {
     button.append(num, name);
     button.setAttribute('aria-label', app ? `${app.title}. Press to open, hold for ${face ? face.second : 'its second face'}.` : `Slot ${i + 1} is empty.`);
 
-    if (app) {
-      let timer = null;
-      let held = false;
-      button.addEventListener('pointerdown', () => {
-        held = false;
-        haptics.pulse('soft');
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          held = true;
-          holdSlot(app.slug, null);
-        }, SLOT_HOLD_MS);
-      });
-      const release = () => {
-        clearTimeout(timer);
-        if (!held) pressSlot(app.slug);
-      };
-      button.addEventListener('pointerup', release);
-      button.addEventListener('pointercancel', () => clearTimeout(timer));
-    }
     slotsEl.appendChild(button);
   }
 }
 
-// Music is the lens's own press: `music.js` stops that press before this file's handler
-// sees it, so the pulse and the lit tile are taken in the capture phase for that one
-// slug, and the first pass's gate with them.
+// One press path for all four slots, taken in the capture phase on the panel. Music's
+// own module stops a press before a button's handler would see it, so a handler per
+// button would have made Music a copy of this file's press; at the panel there is one
+// gate, one soft pulse, one hard pulse and one lit tile, whichever slot it is. What a
+// slot then does is `pressSlot`'s, and Music's lens opens underneath it as before.
+let slotPress = { slug: '', held: false, timer: 0 };
+
+const slotOf = (event) => {
+  const button = event.target && event.target.closest ? event.target.closest('.slot') : null;
+  return button && button.dataset ? button.dataset.slug : '';
+};
+
+const forgetPress = () => {
+  clearTimeout(slotPress.timer);
+  slotPress = { slug: '', held: false, timer: 0 };
+};
+
 slotsEl.addEventListener(
   'pointerdown',
   (event) => {
-    const button = event.target && event.target.closest ? event.target.closest('.slot') : null;
-    const slug = button && button.dataset ? button.dataset.slug : '';
-    if (slug !== 'music') return;
-    if (!onboarded) {
+    const slug = slotOf(event);
+    forgetPress();
+    if (!slug) return;
+    // The first pass comes before the rest of the panel. Settings is how it is turned
+    // off again, so those two are the only slots a page that has not been through it has.
+    if (!onboarded && slug !== 'pulse' && slug !== 'settings') {
       event.preventDefault();
-      event.stopPropagation();
+      event.stopImmediatePropagation();
       haptics.error();
       setStatus('Pulse first.');
       speak('Pulse first');
       return;
     }
-    haptics.pulse('hard');
-    focused = 'music';
-    for (const lit of slotsEl.querySelectorAll('.slot.on')) lit.classList.remove('on');
-    if (button) button.classList.add('on');
-    fetch('/api/focus', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug: 'music' }),
-    }).catch(() => {});
+    slotPress.slug = slug;
+    haptics.pulse('soft');
+    slotPress.timer = setTimeout(() => {
+      slotPress.held = true;
+      holdSlot(slug, null);
+    }, SLOT_HOLD_MS);
   },
   true
 );
+
+slotsEl.addEventListener(
+  'pointerup',
+  (event) => {
+    const slug = slotOf(event);
+    const pressed = slotPress.slug;
+    const held = slotPress.held;
+    forgetPress();
+    if (!pressed || held || slug !== pressed) return;
+    pressSlot(pressed);
+  },
+  true
+);
+
+slotsEl.addEventListener('pointercancel', forgetPress, true);
 
 // The Cards slot is the stack itself: a press steps back through the cards this session
 // made, newest first, and puts that card back in front so its options are the wheel's
@@ -1203,26 +1220,8 @@ function showCardStack() {
   renderMeta(entry);
   setOptions(entry.options);
   cardEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  setStatus(`Card ${stack.length - cardShowing + 1} of ${stack.length}`);
+  setStatus(`Card ${stack.length - cardShowing + 1} of ${stack.length}${hint(' · press again for the one before')}`);
   speak(entry.answer || '');
-}
-
-// The message board is the frequency strip's tray, lifted out of the page: the same
-// clips, more of them at once, and the strip scrolled to. The strip owns the clips, so
-// this only says which of its two sizes to be.
-function openBoard() {
-  const strip = document.getElementById('chan');
-  if (!strip) {
-    setStatus('No message board on this page.');
-    return;
-  }
-  const opening = !strip.classList.contains('board');
-  strip.classList.toggle('board', opening);
-  strip.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  const stationEl = document.getElementById('chanMark');
-  const at = stationEl ? stationEl.textContent : '';
-  setStatus(opening ? `Message board · ${at}` : 'Message board closed');
-  speak(at);
 }
 
 // Pulse's first pass. It is the first interaction with the system, so the press puts it
@@ -1304,10 +1303,12 @@ function showSettings() {
   const bits = [
     `voice ${voiceOn ? 'on' : 'off'}`,
     `haptics ${feelOn ? 'on' : 'off'}`,
+    `tips ${tipsOn ? 'on' : 'off'}`,
     `station ${stationEl ? stationEl.textContent : '—'}`,
   ];
   const choices = [
     `onboarding ${onboarded ? 'off' : 'on'}`,
+    `tips ${tipsOn ? 'off' : 'on'}`,
     `voice ${voiceOn ? 'off' : 'on'}`,
     `haptics ${feelOn ? 'off' : 'on'}`,
   ];
@@ -1317,7 +1318,7 @@ function showSettings() {
   answerEl.textContent = bits.join(' · ');
   metaEl.textContent = '';
   setOptions(choices);
-  setStatus('Settings · turn and press.');
+  setStatus(`Settings${hint(' · turn and press')}`);
 }
 
 function applySetting(choice) {
@@ -1336,6 +1337,9 @@ function applySetting(choice) {
     haptics.setEnabled(feelOn);
     store.set('trnv.feel', feelOn ? 'on' : 'off');
     paintSwitches();
+  } else if (name.startsWith('tips')) {
+    tipsOn = on;
+    store.set('trnv.tips', tipsOn ? 'on' : 'off');
   } else {
     return;
   }
@@ -1347,15 +1351,9 @@ function applySetting(choice) {
 }
 
 async function pressSlot(slug) {
+  // The gate, the soft pulse and the lit tile were taken at the panel before this ran,
+  // for every slot alike; this is only what the slot then does.
   haptics.pulse('hard');
-  // The first pass comes before the rest of the panel, and Settings is how it is turned
-  // off again, so those two are the only slots a page that has not been through it has.
-  if (!onboarded && slug !== 'pulse' && slug !== 'settings') {
-    haptics.error();
-    setStatus('Pulse first.');
-    speak('Pulse first');
-    return;
-  }
   try {
     const response = await fetch('/api/focus', {
       method: 'POST',
@@ -1371,11 +1369,10 @@ async function pressSlot(slug) {
     focused = slug;
     const title = data.focus && data.focus.title ? data.focus.title : slug;
     if (slug === 'cards') showCardStack();
-    else if (slug === 'msg') openBoard();
     else if (slug === 'pulse') advanceOnboarding();
     else if (slug === 'settings') showSettings();
     else {
-      setStatus(`${title} in front`);
+      setStatus(`${title} in front${hint(' · hold for the second face')}`);
       speak(title);
     }
     drawSlotsFromBank();

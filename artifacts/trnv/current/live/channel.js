@@ -191,8 +191,6 @@ function build() {
     #chan .seat .keep:hover, #chan .seat .keep:focus-visible { color: var(--lit); border-color: var(--lit) }
     #chan .seat .cut:hover, #chan .seat .cut:focus-visible { color: #f4511e; border-color: #f4511e }
     #chan .seat.cutting { opacity: .4 }
-    /* The MSG slot lifts the tray out of the strip: same clips, more of them at once. */
-    #chan.board #chanTray { max-height: 56vh }
   `;
   dial.insertAdjacentElement('afterend', strip);
   dial.insertAdjacentElement('afterend', style);
