@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#08090c">
+<title>TRNV</title>
+<style>
+  /* Tapeflow's palette, lifted: the same surface his working build already uses. */
+  :root {
+    --bg: #08090B;
+    --panel: #0B0E14;
+    --raise: #151A23;
+    --ink: #F2F5F9;
+    --dim: #8A93A3;
+    --line: #1D2430;
+    --lit: #E8A33D;      /* the one accent: amber */
+    --lit-dim: rgba(232, 163, 61, .22);
+    --cool: #5B8CFF;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none; user-select: none; }
+  body { display: grid; grid-template-rows: auto 1fr auto; gap: 14px;
+    padding: max(14px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+    max-width: 520px; margin: 0 auto; min-height: 100vh; }
+
+  header { display: flex; align-items: center; justify-content: space-between; }
+  .brand { font-size: 13px; font-weight: 700; letter-spacing: .34em; color: var(--dim); }
+  .switches { display: flex; gap: 8px; }
+  .switch { font: inherit; font-size: 12px; letter-spacing: .04em; color: var(--dim);
+    background: transparent; border: 1px solid var(--line); border-radius: 999px;
+    padding: 7px 12px; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .switch::before { content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--line); transition: background .12s ease; }
+  .switch[aria-pressed="true"] { color: var(--ink); border-color: #2d333f; }
+  .switch[aria-pressed="true"]::before { background: var(--lit); box-shadow: 0 0 8px var(--lit-dim); }
+
+  main { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
+
+  #dial { position: relative; width: min(76vw, 300px); aspect-ratio: 1; border-radius: 50%;
+    background: radial-gradient(circle at 50% 38%, #151922 0%, #0b0d12 62%, #07080b 100%);
+    border: 1px solid var(--line); touch-action: none;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 24px 60px -30px #000;
+    transition: border-color .14s ease, box-shadow .14s ease; }
+  #dial.armed { border-color: #3a4252; }
+  #dial.listening { border-color: var(--lit);
+    box-shadow: 0 0 0 1px var(--lit) inset, 0 0 46px -6px var(--lit-dim); }
+  #ticks { position: absolute; inset: 0; }
+  .tick { position: absolute; top: 50%; left: 50%; width: 3px; height: 13px; border-radius: 2px;
+    background: #2b313d; transform-origin: 50% 0; margin-top: 0; transition: background .12s ease, height .12s ease; }
+  .tick.on { background: var(--lit); height: 22px; width: 4px; }
+  #dial.listening .tick.on { background: #fff; }
+  /* The fixed pointer the marks sweep under: without it a rotating ring reads as still. */
+  #dial::before { content: ''; position: absolute; top: 5px; left: 50%; width: 2px;
+    height: 11px; margin-left: -1px; border-radius: 1px; background: var(--lit); opacity: .7; }
+  /* The kill's handle, borrowed from tapeflow's deck: an orange dot on the rim. A finger
+     that lands on it is gripping the wheel to spin it open; anywhere else the wheel talks
+     and walks as it always did. It takes no pointer events of its own — the hit test is a
+     distance, so the mark stays small while the target a thumb needs stays fat. */
+  #dot { position: absolute; left: 50%; top: 13px; width: 18px; height: 18px;
+    margin-left: -9px; border-radius: 50%; background: #f4511e; z-index: 3;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .4), 0 0 14px rgba(244, 81, 30, .55);
+    transition: transform .12s ease, box-shadow .12s ease; pointer-events: none; }
+  #dot.held { transform: scale(1.4); box-shadow: 0 0 0 1px rgba(0, 0, 0, .4), 0 0 22px rgba(244, 81, 30, .95); }
+
+  #core { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 4px; pointer-events: none; padding: 0 32px; }
+  #option { font-size: clamp(30px, 9vw, 42px); font-weight: 650; letter-spacing: -.02em;
+    line-height: 1.05; text-align: center; }
+  #count { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
+  /* The motor's account of itself, pinned above the wheel: below the fold it may as well
+     not exist, and the whole point is that a hand which feels nothing can read why. */
+  #motor { position: sticky; top: 0; z-index: 6; width: fit-content; margin: 6px auto 10px;
+    padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
+    background: #16161a; font-size: 11px; letter-spacing: .03em; color: var(--dim);
+    font-variant-numeric: tabular-nums; white-space: nowrap; overflow-x: auto; max-width: 100%; }
+
+  /* The four slots: a card is an app, and four are on the panel at once. */
+  #slots { display: flex; gap: 8px; width: 100%; }
+  .slot { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 8px 6px; font: inherit; color: var(--dim); cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    transition: border-color .12s ease, background .12s ease; }
+  .slot .num { font-size: 10px; letter-spacing: .18em; color: var(--dim); }
+  .slot .name { font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .slot .under { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+  .slot.on { border-color: var(--lit); background: var(--raise); box-shadow: 0 0 0 1px var(--lit) inset; }
+  .slot.empty { opacity: .45; }
+
+  /* The option row: the same four-tile panel as the apps, one page of a groove box.
+     The dial walks the list a detent at a time; the page turns on the fifth. */
+  #row { display: flex; gap: 8px; width: 100%; margin-top: 10px; }
+  .tile { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 8px 6px; font: inherit; color: var(--dim); cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center;
+    transition: border-color .12s ease, background .12s ease; }
+  .tile .num { font-size: 10px; letter-spacing: .18em; color: var(--dim); }
+  .tile .name { font-size: 11px; line-height: 1.25; color: var(--ink); overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .tile.on { border-color: var(--lit); background: var(--raise); box-shadow: 0 0 0 1px var(--lit) inset; }
+  .tile.empty { opacity: .35; }
+  #rowpage { width: 100%; margin: 4px 0 0; text-align: right; font-size: 10px;
+    letter-spacing: .16em; color: var(--dim); font-variant-numeric: tabular-nums; min-height: 1em; }
+
+  #card { width: 100%; border-left: 2px solid var(--line); padding: 2px 0 2px 14px; min-height: 96px;
+    transition: border-color .14s ease; }
+  #card.live { border-color: var(--lit); }
+  #question { margin: 0 0 6px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--dim); }
+  #answer { margin: 0; font-size: 15px; line-height: 1.55; color: #d6dbe4;
+    display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+  /* What kind of ask it was — listed when he asks for it, silent otherwise. */
+  #meta { margin: 8px 0 0; min-height: 1em; font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--lit); }
+
+  footer { display: flex; flex-direction: column; gap: 10px; }
+  #typed { display: flex; gap: 8px; }
+  #typed input { flex: 1; min-width: 0; font: inherit; font-size: 16px; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 12px 14px; }
+  #typed input:focus { outline: none; border-color: #333a47; }
+  #typed button { font: inherit; font-weight: 650; font-size: 15px; color: #14100a;
+    background: var(--lit); border: 0; border-radius: var(--radius); padding: 0 18px; }
+  #status { min-height: 1.4em; font-size: 12px; color: var(--dim); letter-spacing: .02em; }
+  #log { max-height: 19vh; overflow: auto; font-size: 12px; color: #5f6877; }
+  #log p { margin: 0 0 6px; }
+  #log p.q { color: #8e98a8; }
+  /* A line stands for the card it printed: two picks make the difference. */
+  #log p.pick { cursor: pointer; }
+  #log p.picked { color: var(--lit); }
+
+  /* Nothing on this page may be wider than the phone it is on. The motor line is a
+     single line of text that used to push the whole document to 414 at a 360 viewport,
+     which put the fourth slot and the Ask button off the screen. The pill scrolls its
+     own overflow instead, and the boxes in the column are allowed to shrink. */
+  body > * { min-width: 0; }
+  main > * { min-width: 0; }
+  #motor { max-width: 100%; scrollbar-width: none; }
+  #motor::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="brand">TRNV</span>
+    <div class="switches">
+      <button class="switch" id="voice" type="button" aria-pressed="true">voice</button>
+      <button class="switch" id="feel" type="button" aria-pressed="true">haptics</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="slots" role="group" aria-label="Apps"></div>
+
+    <div id="motor" aria-live="polite"></div>
+
+    <div id="dial" role="group" aria-label="Dial. Hold to talk, turn to walk the options, press to choose."
+         aria-live="polite" aria-atomic="true">
+      <div id="ticks"></div>
+      <span id="dot" role="button" aria-label="Kill switch: put a finger on the dot and turn a full circle"></span>
+      <div id="core"><div id="option">hold</div><div id="count">to talk</div></div>
+    </div>
+
+    <section id="card" aria-live="polite">
+      <p id="question">Ready</p>
+      <p id="answer">Hold the dial and speak. Turn it to walk the options; press to take one.</p>
+      <p id="meta"></p>
+    </section>
+
+    <div id="row" role="group" aria-label="Options, four at a time" aria-live="polite"></div>
+    <div id="rowpage" aria-hidden="true"></div>
+  </main>
+
+  <footer>
+    <form id="typed" autocomplete="off">
+      <input id="text" placeholder="Or type it" aria-label="Type instead of speaking" enterkeyhint="go">
+      <button type="submit">Ask</button>
+    </form>
+    <div id="status"></div>
+    <div id="log" aria-live="polite"></div>
+  </footer>
+
+  <script type="module" src="./ptt.js"></script>
+  <!-- The Music slot has no route (`kind: "local"`), so its app is this module: the
+       file picker, the device store, and the dial as a jog. -->
+  <script type="module" src="./music.js"></script>
+  <!-- The frequency strip: what he says on a channel reaches other devices, not only
+       the assistant. It takes the clip from ptt.js's own send, so the recorder stays
+       in one place. -->
+  <script type="module" src="./channel.js"></script>
+</body>
+</html>
