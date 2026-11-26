@@ -630,6 +630,12 @@ async function choose(chosen) {
 
   const from = card || {};
 
+  // A setting is not an ask: it is applied here, and the card redraws itself.
+  if (from.via === 'settings') {
+    applySetting(chosen);
+    return;
+  }
+
   // Her options are hers: taking one is the next thing he says to her, not an
   // instruction to the wheel's own worker.
   if (from.via === 'ambient') {
@@ -767,7 +773,7 @@ function beginHold() {
 
   // Pulse in front: a hold is its first pass, a line at a time, not the microphone.
   if (focused === 'pulse') {
-    stepOnboarding();
+    advanceOnboarding();
     return;
   }
 
@@ -1073,6 +1079,9 @@ const SLOT_HOLD_MS = 500;
 
 let bank = null;
 let focused = null;
+// A page that has never been through Pulse's first pass has to: the tile is lit and the
+// other slots answer "Pulse first" until it has. Settings can turn it back on.
+let onboarded = store.get('trnv.onboarded', '') === 'yes';
 
 async function loadSlots() {
   let apps = [];
@@ -1101,7 +1110,8 @@ function drawSlots(apps) {
     const app = apps[i] || null;
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'slot' + (app ? '' : ' empty') + (app && focused === app.slug ? ' on' : '');
+    const lit = Boolean(app) && (focused === app.slug || (!onboarded && app.slug === 'pulse'));
+    button.className = 'slot' + (app ? '' : ' empty') + (lit ? ' on' : '');
     button.dataset.slug = app ? app.slug : '';
     button.disabled = !app;
 
@@ -1138,6 +1148,36 @@ function drawSlots(apps) {
     slotsEl.appendChild(button);
   }
 }
+
+// Music is the lens's own press: `music.js` stops that press before this file's handler
+// sees it, so the pulse and the lit tile are taken in the capture phase for that one
+// slug, and the first pass's gate with them.
+slotsEl.addEventListener(
+  'pointerdown',
+  (event) => {
+    const button = event.target && event.target.closest ? event.target.closest('.slot') : null;
+    const slug = button && button.dataset ? button.dataset.slug : '';
+    if (slug !== 'music') return;
+    if (!onboarded) {
+      event.preventDefault();
+      event.stopPropagation();
+      haptics.error();
+      setStatus('Pulse first.');
+      speak('Pulse first');
+      return;
+    }
+    haptics.pulse('hard');
+    focused = 'music';
+    for (const lit of slotsEl.querySelectorAll('.slot.on')) lit.classList.remove('on');
+    if (button) button.classList.add('on');
+    fetch('/api/focus', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'music' }),
+    }).catch(() => {});
+  },
+  true
+);
 
 // The Cards slot is the stack itself: a press steps back through the cards this session
 // made, newest first, and puts that card back in front so its options are the wheel's
@@ -1186,15 +1226,16 @@ function openBoard() {
 }
 
 // Pulse's first pass. It is the first interaction with the system, so the press puts it
-// in front and a hold walks it forward a line at a time: typed on the card, at the speed
-// of reading, with a pulse as each line lands. Nothing is asked and nothing is sent.
+// in front and the press walks it forward a line at a time: typed on the card, at the
+// speed of reading, with a pulse as each line lands. Nothing is asked and nothing is
+// sent, and until it is done the other slots answer "Pulse first".
 const ONBOARD = [
-  'Pulse is the system. A pulse comes first; the words are on the card.',
-  'Hold the dial and speak. What you say becomes the card in front of you.',
-  'Turn the wheel to walk what it offers. Press to take one.',
+  'Pulse is your familiar. It comes first, in this medium and every other one we build.',
+  'It says a thing in pulses before it says it in words, and it explains what is in front of you.',
+  'Hold the dial anywhere and speak. What you say becomes the card in front of you.',
+  'Turn the wheel to walk what it offers. Press to take one; the card beneath it stays.',
   'The dot on the rim is the kill: a finger on it, a full circle.',
-  'Haptics and voice are the two switches at the top of the page.',
-  'Four slots: Pulse, Music, MSG, Settings. MSG is a frequency two phones tune to.',
+  'Four slots: Pulse, Music, Cards, Settings. Pulse is the one that explains the rest.',
 ];
 
 let onboardStep = 0;
@@ -1214,31 +1255,50 @@ function typeInto(el, text) {
   step();
 }
 
-function showPulse() {
+function showOnboardPrompt() {
   onboardStep = 0;
   cardEl.classList.add('live');
   questionEl.textContent = 'Pulse';
-  answerEl.textContent = 'Hold the dial to start.';
+  answerEl.textContent = 'Press Pulse to start.';
   metaEl.textContent = '';
   setOptions([]);
-  setStatus('Pulse · hold the dial to start.');
-  speak('Hold the dial to start');
+  setStatus('Pulse first · press it.');
+  speak('Press Pulse to start');
 }
 
-function stepOnboarding() {
+function advanceOnboarding() {
   if (!ONBOARD.length) return;
-  const line = ONBOARD[Math.min(onboardStep, ONBOARD.length - 1)];
+  if (onboardStep >= ONBOARD.length) {
+    endOnboarding();
+    return;
+  }
+  const line = ONBOARD[onboardStep];
   onboardStep += 1;
-  questionEl.textContent = `Pulse · ${onboardStep} of ${ONBOARD.length}`;
   cardEl.classList.add('live');
+  questionEl.textContent = `Pulse · ${onboardStep} of ${ONBOARD.length}`;
   haptics.pulse('soft');
   typeInto(answerEl, line);
   speak(line);
-  setStatus(onboardStep >= ONBOARD.length ? 'Its own language comes next.' : 'Pulse · hold for the next line.');
+  setStatus(onboardStep >= ONBOARD.length ? 'Press Pulse once more to finish.' : 'Press Pulse for the next line.');
 }
 
-// Settings is what it knows about its own state, on the card: the two switches and the
-// frequency the strip is holding. It is a reading, not a second set of controls.
+function endOnboarding() {
+  onboarded = true;
+  store.set('trnv.onboarded', 'yes');
+  onboardStep = 0;
+  cardEl.classList.add('live');
+  questionEl.textContent = 'Pulse';
+  answerEl.textContent = 'That is the first pass. Settings turns it back on.';
+  metaEl.textContent = '';
+  setOptions([]);
+  setStatus('Onboarding done.');
+  speak('Onboarding done');
+  drawSlotsFromBank();
+}
+
+// Settings is what it knows about its own state, and the three things it can change:
+// whether the first pass comes back, voice, haptics. The wheel walks them and a press
+// takes one, the same way every other list on this page is taken.
 function showSettings() {
   const stationEl = document.getElementById('chanMark');
   const bits = [
@@ -1246,17 +1306,56 @@ function showSettings() {
     `haptics ${feelOn ? 'on' : 'off'}`,
     `station ${stationEl ? stationEl.textContent : '—'}`,
   ];
+  const choices = [
+    `onboarding ${onboarded ? 'off' : 'on'}`,
+    `voice ${voiceOn ? 'off' : 'on'}`,
+    `haptics ${feelOn ? 'off' : 'on'}`,
+  ];
+  card = { via: 'settings', question: 'Settings', answer: bits.join(' · '), options: choices };
   cardEl.classList.add('live');
   questionEl.textContent = 'Settings';
   answerEl.textContent = bits.join(' · ');
   metaEl.textContent = '';
-  setOptions([]);
-  setStatus('Settings');
-  speak(bits.join(', '));
+  setOptions(choices);
+  setStatus('Settings · turn and press.');
+}
+
+function applySetting(choice) {
+  const name = String(choice || '');
+  const on = name.endsWith(' on');
+  if (name.startsWith('onboarding')) {
+    onboarded = on;
+    store.set('trnv.onboarded', onboarded ? 'yes' : 'no');
+    onboardStep = 0;
+  } else if (name.startsWith('voice')) {
+    voiceOn = on;
+    store.set('trnv.voice', voiceOn ? 'on' : 'off');
+    paintSwitches();
+  } else if (name.startsWith('haptics')) {
+    feelOn = on;
+    haptics.setEnabled(feelOn);
+    store.set('trnv.feel', feelOn ? 'on' : 'off');
+    paintSwitches();
+  } else {
+    return;
+  }
+  haptics.chosen();
+  setStatus(name);
+  showSettings();
+  speak(name);
+  drawSlotsFromBank();
 }
 
 async function pressSlot(slug) {
   haptics.pulse('hard');
+  // The first pass comes before the rest of the panel, and Settings is how it is turned
+  // off again, so those two are the only slots a page that has not been through it has.
+  if (!onboarded && slug !== 'pulse' && slug !== 'settings') {
+    haptics.error();
+    setStatus('Pulse first.');
+    speak('Pulse first');
+    return;
+  }
   try {
     const response = await fetch('/api/focus', {
       method: 'POST',
@@ -1273,7 +1372,7 @@ async function pressSlot(slug) {
     const title = data.focus && data.focus.title ? data.focus.title : slug;
     if (slug === 'cards') showCardStack();
     else if (slug === 'msg') openBoard();
-    else if (slug === 'pulse') showPulse();
+    else if (slug === 'pulse') advanceOnboarding();
     else if (slug === 'settings') showSettings();
     else {
       setStatus(`${title} in front`);
@@ -1312,3 +1411,7 @@ buildTicks(0);
 loadSlots();
 render();
 setStatus(`Hold the dial and speak — ${HOLD_MS} ms. Turn for options, press to take one.`);
+
+// A page that has never met Pulse starts there, with the tile lit and nothing else
+// answering until the first pass is done.
+if (!onboarded) showOnboardPrompt();
