@@ -77,6 +77,9 @@ let metaMode = store.get('trnv.meta', 'silent') === 'listed' ? 'listed' : 'silen
 // Tips are the half of a status line that tells him what to do next. Settings turns
 // them off for a hand that already knows.
 let tipsOn = store.get('trnv.tips', 'on') !== 'off';
+// Whether the first pass is still owed on this device. Turning it off is not the same as
+// never having done it: it stops the pass being asked for again.
+let passOn = store.get('trnv.pass', 'on') !== 'off';
 const motor = createHaptics({ enabled: feelOn });
 
 // The heartbeat in the middle of the wheel. Every shape the hand feels, the circle in
@@ -218,6 +221,18 @@ function buildTicks(count) {
 const ROW_TILES = 4;
 let rowPage = 0;
 
+/**
+ * An option is a word from the wheel's own list, but a card's options come back as
+ * objects: whatever the shape, what is shown is its label, never "[object Object]".
+ */
+function labelOf(value) {
+  if (value && typeof value === 'object') {
+    const named = value.label || value.title || value.name || value.text || value.value;
+    return String(named == null ? '' : named);
+  }
+  return String(value == null ? '' : value);
+}
+
 function paintRow() {
   if (!rowEl) return;
   const pages = Math.max(1, Math.ceil(options.length / ROW_TILES));
@@ -239,7 +254,7 @@ function paintRow() {
     num.textContent = '0' + (i + 1);
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = label || '—';
+    name.textContent = label ? labelOf(label) : '—';
     tile.append(num, name);
 
     if (label) {
@@ -261,7 +276,7 @@ function paintRow() {
 function render() {
   paintRow();
   if (options.length) {
-    optionEl.textContent = options[index];
+    optionEl.textContent = labelOf(options[index]);
     countEl.textContent = `${index + 1} of ${options.length}`;
   } else {
     optionEl.textContent = recorder ? 'listen' : 'hold';
@@ -312,7 +327,7 @@ function setOptions(list) {
   paintWheel();
   if (options.length) {
     setStatus(`Turn to hear them, press to take one.`);
-    queueSay(`Options: ${options.join(', ')}`);
+    queueSay(`Options: ${options.map(labelOf).join(', ')}`);
   }
 }
 
@@ -971,7 +986,7 @@ dial.addEventListener('pointerup', (event) => {
     } else if (decided && decided.type === 'tap' && kill.state !== 'killed') {
       // The heartbeat is the next-line control while the first pass is running: the
       // circle is where his thumb already rests, so touching it moves the writing on.
-      if (!onboarded && onHeart(pointOf(event))) {
+      if (pulseFirst() && onHeart(pointOf(event))) {
         focused = 'pulse';
         advanceOnboarding();
         drawSlotsFromBank();
@@ -1018,10 +1033,12 @@ setInterval(() => {
 /* ------------------------------------------------------------------- switches */
 
 function paintSwitches() {
+  // The state, not a verb: a switch that reads "voice off" while it is on is the whole
+  // reason the first switch read backwards.
   voiceBtn.setAttribute('aria-pressed', String(voiceOn));
-  voiceBtn.textContent = voiceOn ? 'voice' : 'silent';
+  voiceBtn.textContent = voiceOn ? 'voice on' : 'voice off';
   feelBtn.setAttribute('aria-pressed', String(feelOn));
-  feelBtn.textContent = feelOn ? 'haptics' : 'no haptics';
+  feelBtn.textContent = feelOn ? 'haptics on' : 'haptics off';
   if (!haptics.available) {
     feelBtn.disabled = true;
     feelBtn.title = 'This browser has no vibration motor it can reach.';
@@ -1201,7 +1218,7 @@ function drawSlots(apps) {
     const app = apps[i] || null;
     const button = document.createElement('button');
     button.type = 'button';
-    const lit = Boolean(app) && (focused === app.slug || (!onboarded && app.slug === 'pulse'));
+    const lit = Boolean(app) && (focused === app.slug || (pulseFirst() && app.slug === 'pulse'));
     button.className = 'slot' + (app ? '' : ' empty') + (lit ? ' on' : '');
     button.dataset.slug = app ? app.slug : '';
     button.disabled = !app;
@@ -1246,7 +1263,7 @@ slotsEl.addEventListener(
     if (!slug) return;
     // The first pass comes before the rest of the panel. Settings is how it is turned
     // off again, so those two are the only slots a page that has not been through it has.
-    if (!onboarded && slug !== 'pulse' && slug !== 'settings') {
+    if (pulseFirst() && slug !== 'pulse' && slug !== 'settings') {
       event.preventDefault();
       event.stopImmediatePropagation();
       haptics.error();
@@ -1294,7 +1311,13 @@ function showCardStack() {
     speak('No cards');
     return;
   }
-  cardShowing = Math.min(cardShowing + 1, stack.length);
+  showCardAt(cardShowing + 1);
+}
+
+/** Put the card `step` back from the newest in front: 1 is the newest, stack.length the oldest. */
+function showCardAt(step) {
+  if (!stack.length) return;
+  cardShowing = Math.min(Math.max(step, 1), stack.length);
   const entry = stack[stack.length - cardShowing];
   card = entry;
   questionEl.textContent = entry.question || entry.chosen || '—';
@@ -1305,7 +1328,76 @@ function showCardStack() {
   cardEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   setStatus(`Card ${stack.length - cardShowing + 1} of ${stack.length}${hint(' · press again for the one before')}`);
   speak(entry.answer || '');
+  paintPad();
 }
+
+/* ---------------------------------------------------------------------- the pad */
+
+// The cards are not the wheel's private property. A hand that would rather tap a
+// direction than turn one gets four of them inside the same circle: up is the card
+// before this one, down the one after, left closes the stack, right jumps to the
+// newest. The wheel keeps working underneath — the pad is a second way, not a rule.
+let pad = null;
+
+function paintPad() {
+  if (!pad) return;
+  const open = focused === 'cards' && stack.length > 0;
+  pad.classList.toggle('on', open);
+  pad.hidden = !open;
+}
+
+function padStep(step) {
+  if (step === 'older') { haptics.pulse('soft'); showCardAt(cardShowing + 1); return; }
+  if (step === 'newer') { haptics.pulse('soft'); showCardAt(cardShowing - 1); return; }
+  if (step === 'newest') { haptics.pulse('soft'); showCardAt(1); return; }
+  if (step === 'close') {
+    haptics.pulse('medium');
+    cardShowing = 0;
+    focused = null;
+    setOptions([]);
+    setStatus('Cards closed.');
+    drawSlotsFromBank();
+    paintPad();
+  }
+}
+
+function buildPad() {
+  pad = document.createElement('div');
+  pad.id = 'pad';
+  pad.hidden = true;
+  pad.setAttribute('role', 'group');
+  pad.setAttribute('aria-label', 'Cards: four directions');
+  pad.innerHTML = `
+    <button type="button" data-step="older">older</button>
+    <button type="button" data-step="newest">newest</button>
+    <button type="button" data-step="close">close</button>
+    <button type="button" data-step="newer">newer</button>
+  `;
+  const style = document.createElement('style');
+  style.textContent = `
+    #pad { position: absolute; inset: 5%; z-index: 4; }
+    #pad[hidden] { display: none }
+    #pad button { position: absolute; font: inherit; font-size: 10px; letter-spacing: .14em;
+      text-transform: uppercase; color: var(--dim); background: rgba(11, 14, 20, .88);
+      border: 1px solid var(--line); border-radius: 999px; padding: 8px 11px; cursor: pointer; }
+    #pad button:focus-visible, #pad button:active { color: var(--lit); border-color: var(--lit) }
+    #pad [data-step="older"] { top: 0; left: 50%; transform: translateX(-50%) }
+    #pad [data-step="newer"] { bottom: 0; left: 50%; transform: translateX(-50%) }
+    #pad [data-step="close"] { left: 0; top: 50%; transform: translateY(-50%) }
+    #pad [data-step="newest"] { right: 0; top: 50%; transform: translateY(-50%) }
+  `;
+  dial.insertAdjacentElement('afterend', style);
+  dial.appendChild(pad);
+  for (const button of pad.querySelectorAll('button')) {
+    // The dial arms a press on any pointerdown that reaches it: the pad's own taps must
+    // not become an attempt to talk.
+    button.addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); });
+    button.addEventListener('pointerup', (event) => event.stopPropagation());
+    button.addEventListener('click', (event) => { event.stopPropagation(); padStep(button.dataset.step); });
+  }
+}
+
+buildPad();
 
 // Pulse's first pass. It is the first interaction with the system, so the press puts it
 // in front and the press walks it forward a line at a time: typed on the card, at the
@@ -1361,15 +1453,37 @@ function showOnboardPrompt() {
   speak('Press Pulse to start');
 }
 
-/** The post, whenever the slot is pressed after the first pass: the same words. */
-function showPulseSays() {
+/** The first pass is owed only on a page that has not been through it, with the pass on. */
+function pulseFirst() {
+  return !onboarded && passOn;
+}
+
+/**
+ * What the page is holding, read off the page itself: no preference engine is invented
+ * here, only what is actually set, kept or recorded on this device.
+ */
+function intakeLine() {
+  const stationEl = document.getElementById('chanMark');
+  const keyEl = document.getElementById('chanKey');
+  return [
+    `station ${stationEl ? stationEl.textContent : '—'}`,
+    keyEl && keyEl.dataset.set === 'yes' ? 'key held' : 'no key',
+    `voice ${voiceOn ? 'on' : 'off'}`,
+    `haptics ${feelOn ? 'on' : 'off'}`,
+    `tips ${tipsOn ? 'on' : 'off'}`,
+    `${stack.length} card${stack.length === 1 ? '' : 's'} this session`,
+  ].join(' · ');
+}
+
+/** The post, whenever the slot is pressed after the first pass: who she is, and what she holds. */
+function showPulse() {
   cardEl.classList.add('live');
   questionEl.textContent = 'Pulse';
-  metaEl.textContent = '';
+  metaEl.textContent = intakeLine();
   setOptions([]);
   typeInto(answerEl, PULSE_SAYS);
   speak(PULSE_SAYS);
-  setStatus(`Pulse${hint(' · press the slot again to hear it again')}`);
+  setStatus(`Pulse${hint(' · hold the dial to ask it something')}`);
 }
 
 function advanceOnboarding() {
@@ -1413,13 +1527,14 @@ function showSettings() {
     `voice ${voiceOn ? 'on' : 'off'}`,
     `haptics ${feelOn ? 'on' : 'off'}`,
     `tips ${tipsOn ? 'on' : 'off'}`,
+    `onboarding ${passOn ? 'on' : 'off'}`,
     `station ${stationEl ? stationEl.textContent : '—'}`,
   ];
   const choices = [
-    `onboarding ${onboarded ? 'off' : 'on'}`,
-    `tips ${tipsOn ? 'off' : 'on'}`,
-    `voice ${voiceOn ? 'off' : 'on'}`,
-    `haptics ${feelOn ? 'off' : 'on'}`,
+    `turn onboarding ${passOn ? 'off' : 'on'}`,
+    `turn tips ${tipsOn ? 'off' : 'on'}`,
+    `turn voice ${voiceOn ? 'off' : 'on'}`,
+    `turn haptics ${feelOn ? 'off' : 'on'}`,
   ];
   card = { via: 'settings', question: 'Settings', answer: bits.join(' · '), options: choices };
   cardEl.classList.add('live');
@@ -1431,10 +1546,14 @@ function showSettings() {
 }
 
 function applySetting(choice) {
-  const name = String(choice || '');
+  const name = String(choice || '').replace(/^turn /, '');
   const on = name.endsWith(' on');
   if (name.startsWith('onboarding')) {
-    onboarded = on;
+    passOn = on;
+    store.set('trnv.pass', passOn ? 'on' : 'off');
+    // Off asks nothing of him and leaves Pulse as what it says it is; on asks for the
+    // pass again rather than pretending the first one never happened.
+    onboarded = !on;
     store.set('trnv.onboarded', onboarded ? 'yes' : 'no');
     onboardStep = 0;
   } else if (name.startsWith('voice')) {
@@ -1454,8 +1573,12 @@ function applySetting(choice) {
   }
   haptics.chosen();
   setStatus(name);
-  showSettings();
-  speak(name);
+  if (!onboarded) {
+    showOnboardPrompt();
+  } else {
+    showSettings();
+    speak(name);
+  }
   drawSlotsFromBank();
 }
 
@@ -1479,9 +1602,10 @@ async function pressSlot(slug) {
     const title = data.focus && data.focus.title ? data.focus.title : slug;
     if (slug === 'cards') showCardStack();
     else if (slug === 'pulse') {
-      // In practice the slot says who she is; the first pass only runs while it is owed.
-      if (onboarded) showPulseSays();
-      else advanceOnboarding();
+      // The pass only runs while it is owed; afterwards the slot says who she is and what
+      // the page is holding, and a hold on the dial asks whatever he wants to ask.
+      if (pulseFirst()) advanceOnboarding();
+      else showPulse();
     }
     else if (slug === 'settings') showSettings();
     else {
@@ -1489,6 +1613,7 @@ async function pressSlot(slug) {
       speak(title);
     }
     drawSlotsFromBank();
+    paintPad();
   } catch (error) {
     haptics.error();
     setStatus('Offline: ' + (error && error.message ? error.message : 'failed'));
@@ -1524,4 +1649,4 @@ setStatus(`Hold the dial and speak — ${HOLD_MS} ms. Turn for options, press to
 
 // A page that has never met Pulse starts there, with the tile lit and nothing else
 // answering until the first pass is done.
-if (!onboarded) showOnboardPrompt();
+if (pulseFirst()) showOnboardPrompt();
