@@ -61,6 +61,7 @@ let phrase = read(PHRASE_KEY, '');
 let key = '';             // derived from the phrase; never written down
 let claimed = '';         // the station the Worker has accepted this key on
 let blocked = false;      // a browser that will not play until it is touched
+let heldElsewhere = false; // this station was claimed by a key that is not this one
 let busy = false;
 let queue = Promise.resolve();
 
@@ -149,11 +150,13 @@ function paint() {
   // Who can hear this is the question the strip never answered: the key is the whole of
   // the audience, so the strip says so in a line that stays put rather than a note.
   if (whoEl) {
-    whoEl.textContent = !key
-      ? 'no key — nothing leaves this device'
-      : onAir
-        ? `keyed ${station} — anyone with your key hears this`
-        : 'off air — the station is quiet';
+    whoEl.textContent = heldElsewhere
+      ? `${station} is held by another key — set the key this station was made with`
+      : !key
+        ? 'no key — nothing leaves this device'
+        : onAir
+          ? `keyed ${station} — anyone with your key hears this`
+          : 'off air — the station is quiet';
   }
   if (strip) {
     strip.classList.toggle('live', onAir && Boolean(key));
@@ -229,6 +232,7 @@ function build() {
     phrase = String(answer).trim();
     write(PHRASE_KEY, phrase);
     claimed = '';
+    heldElsewhere = false;   // a different key is a different question to ask
     key = '';
     stopClip();
     inbox.length = 0;          // another key is another station, even on the same number
@@ -269,6 +273,7 @@ function tune(delta) {
   station = stamped;
   write(CHANNEL_KEY, station);
   heard = cursorOf(station);   // what was said here while this device was elsewhere
+  heldElsewhere = false;       // another number is another station's owner
   claimed = '';
   stopClip();                  // a clip from the old number is not this number's
   inbox.length = 0;
@@ -359,11 +364,19 @@ async function claim(force) {
     const data = await response.json().catch(() => null);
     if (response.ok && data && data.ok) {
       claimed = station;
+      heldElsewhere = false;
       return true;
     }
     claimed = '';
-    if (response.status === 403) note('another key holds this frequency', true);
-    else note('the frequency did not answer', true);
+    // A station belongs to the key that claimed it first. Asking again every 1.8 s will
+    // not change that, so the page stops asking and says whose it is instead.
+    if (response.status === 403) {
+      heldElsewhere = true;
+      note('another key holds this frequency', true);
+      paint();
+    } else {
+      note('the frequency did not answer', true);
+    }
     return false;
   } catch {
     claimed = '';
@@ -481,7 +494,7 @@ function askForSound() {
 // is a handful of rows and the order is what matters, not the identity of a node.
 /** The strip is what glows when something lands on this frequency. */
 function alertStrip() {
-  if (!strip || !fresh.length) return;
+  if (!strip) return;
   strip.classList.remove('alert');
   void strip.offsetWidth;
   strip.classList.add('alert');
@@ -603,7 +616,10 @@ function advance(at) {
 }
 
 async function poll() {
-  if (!onAir || blocked || busy || !key) return;
+  // A browser that will not play a clip is not a browser that cannot be told one
+  // arrived: what was said is fetched and listed either way, and only the automatic
+  // playback waits for a touch.
+  if (!onAir || busy || !key || heldElsewhere) return;
   busy = true;
   try {
     if (!(await claim())) return;
@@ -635,7 +651,7 @@ async function poll() {
       // One clip landing alone plays as it lands. Several at once are laid out instead:
       // four clips started together are four voices on top of each other, and the tray
       // is how they get heard one at a time.
-      if (fresh.length === 1 && !playingId) {
+      if (fresh.length === 1 && !playingId && !blocked) {
         const started = await playClip(fresh[0]);
         if (!started) {
           blocked = true;
