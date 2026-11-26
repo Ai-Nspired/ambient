@@ -77,7 +77,72 @@ let metaMode = store.get('trnv.meta', 'silent') === 'listed' ? 'listed' : 'silen
 // Tips are the half of a status line that tells him what to do next. Settings turns
 // them off for a hand that already knows.
 let tipsOn = store.get('trnv.tips', 'on') !== 'off';
-const haptics = createHaptics({ enabled: feelOn });
+const motor = createHaptics({ enabled: feelOn });
+
+// The heartbeat in the middle of the wheel. Every shape the hand feels, the circle in
+// the middle shows: one swell for a detent, a longer one for a hard stop, one long
+// swell for yes and two quick ones for no. Pulse speaks through it before words.
+const pulseEl = document.getElementById('pulse');
+const BEATS = {
+  soft: [200, 1.22],
+  edge: [200, 1.26],
+  medium: [260, 1.34],
+  hard: [330, 1.5],
+  error: [420, 1.5],
+  chosen: [300, 1.4],
+  send: [220, 1.25],
+  hold: [300, 1.35],
+  grip: [240, 1.28],
+};
+
+/** One swell for one pulse, at the size of the pattern the motor just ran. */
+function showBeat(name) {
+  if (!pulseEl || !BEATS[name]) return;
+  const [ms, to] = BEATS[name];
+  pulseEl.style.setProperty('--beat-ms', `${ms}ms`);
+  pulseEl.style.setProperty('--beat-to', String(to));
+  pulseEl.classList.remove('beat');
+  void pulseEl.offsetWidth;   // restart even when the last beat is still landing
+  pulseEl.classList.add('beat');
+}
+
+// The two answers before words: one long swell is yes, two quick ones are no.
+let answerOff = 0;
+function showAnswer(kind) {
+  if (!pulseEl) return;
+  clearTimeout(answerOff);
+  pulseEl.classList.remove('yes', 'no');
+  void pulseEl.offsetWidth;
+  pulseEl.classList.add(kind);
+  answerOff = setTimeout(() => pulseEl.classList.remove(kind), kind === 'yes' ? 900 : 460);
+}
+
+/**
+ * The motor and its face are one call, so no gesture can buzz without the wheel
+ * showing it: a call site says what it means and both answer.
+ */
+const haptics = {
+  get available() { return motor.available; },
+  get enabled() { return motor.enabled; },
+  get count() { return motor.count; },
+  get last() { return motor.last; },
+  get accepted() { return motor.accepted; },
+  get refused() { return motor.refused; },
+  setEnabled(next) { return motor.setEnabled(next); },
+  stop() { return motor.stop(); },
+  pulse(tier) {
+    showBeat(['soft', 'edge', 'medium', 'hard'].includes(tier) ? tier : 'soft');
+    return motor.pulse(tier);
+  },
+  edge() { showBeat('edge'); return motor.edge(); },
+  hold() { showBeat('hold'); return motor.hold(); },
+  send() { showBeat('send'); return motor.send(); },
+  chosen() { showBeat('chosen'); return motor.chosen(); },
+  error() { showBeat('error'); return motor.error(); },
+  grip() { showBeat('grip'); return motor.grip(); },
+  yes() { showAnswer('yes'); return motor.yes(); },
+  no() { showAnswer('no'); return motor.no(); },
+};
 
 let options = [];
 let index = 0;
@@ -1229,12 +1294,16 @@ function showCardStack() {
 // speed of reading, with a pulse as each line lands. Nothing is asked and nothing is
 // sent, and until it is done the other slots answer "Pulse first".
 const ONBOARD = [
-  'Pulse is your familiar. It comes first, in this medium and every other one we build.',
-  'It says a thing in pulses before it says it in words, and it explains what is in front of you.',
-  'Hold the dial anywhere and speak. What you say becomes the card in front of you.',
-  'Turn the wheel to walk what it offers. Press to take one; the card beneath it stays.',
-  'The dot on the rim is the kill: a finger on it, a full circle.',
-  'Four slots: Pulse, Music, Cards, Settings. Pulse is the one that explains the rest.',
+  { line: 'Pulse is your familiar. It comes first, in this medium and every other one we build.' },
+  { line: 'The circle in the middle of the wheel is Pulse itself. Your thumb is on the heartbeat, and it beats when the wheel has something to say.' },
+  { line: 'It says a thing in pulses before it says it in words, and it explains what is in front of you.' },
+  { line: 'Two answers before words. One long beat is yes.', answer: 'yes' },
+  { line: 'Two quick beats is no.', answer: 'no' },
+  { line: 'Hold the dial anywhere and speak. What you say becomes the card in front of you.' },
+  { line: 'Turn the wheel to walk what it offers. Press to take one; the card beneath it stays.' },
+  { line: 'Pulse takes the work ARA did: it takes in what you prefer and what you mean, keeps explicit intent explicit, and that is the learning loop.' },
+  { line: 'The dot on the rim is the kill: a finger on it, a full circle.' },
+  { line: 'Four slots: Pulse, Music, Cards, Settings. Pulse is the one that explains the rest.' },
 ];
 
 let onboardStep = 0;
@@ -1271,13 +1340,15 @@ function advanceOnboarding() {
     endOnboarding();
     return;
   }
-  const line = ONBOARD[onboardStep];
+  const step = ONBOARD[onboardStep];
   onboardStep += 1;
   cardEl.classList.add('live');
   questionEl.textContent = `Pulse · ${onboardStep} of ${ONBOARD.length}`;
-  haptics.pulse('soft');
-  typeInto(answerEl, line);
-  speak(line);
+  if (step.answer === 'yes') haptics.yes();
+  else if (step.answer === 'no') haptics.no();
+  else haptics.pulse('soft');
+  typeInto(answerEl, step.line);
+  speak(step.line);
   setStatus(onboardStep >= ONBOARD.length ? 'Press Pulse once more to finish.' : 'Press Pulse for the next line.');
 }
 
