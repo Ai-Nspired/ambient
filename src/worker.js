@@ -548,52 +548,68 @@ ${documents}` };
       return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
     }
   }
-  // No OpenRouter key is bound on this Worker, and the plain text path carries no
-  // image at all, so a picture would end the turn blind. It is read by the proxy's
-  // vision model instead - the same upstream the deciders already use - and only an
-  // image turn takes this path.
+  // The cheapest model is tried first, picture and all. Only when it refuses does the
+  // cheap vision model read the image: the fallback is proven by a real refusal rather
+  // than assumed, and a text-only model still answers every turn without a picture.
   const unread = files.filter((file) => file.image && file.dataUrl).map((file) => file.dataUrl);
   if (unread.length) {
+    const cheapModel = env.MODEL || "upstage/solar-mini-4-5";
     const visionModel = env.VISION_MODEL || "google/gemma-3-4b-it";
     const parts = messages.map(
       (message, index) => index === messages.length - 1 && unread.length ? { role: message.role, content: [{ type: "text", text: message.content }, ...unread.map((url) => ({ type: "image_url", image_url: { url } }))] } : message
     );
-    const visionPrice = modelPrice(visionModel);
-    if (!visionPrice.ok) {
-      return json({ error: { code: "model_over_price", message: visionPrice.reason } }, 402);
+    const binding = env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
+    if (!binding) {
+      return json({ error: { code: "proxy_unbound", message: "AI_PROXY binding is missing; the picture cannot be read." } }, 502);
     }
-    try {
-      const binding = env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
-      if (!binding) {
-        return json({ error: { code: "proxy_unbound", message: "AI_PROXY binding is missing; the picture cannot be read." } }, 502);
+    // Over the binding, not the workers.dev hostname: ambient and orproxy share a
+    // zone, and Cloudflare refuses that fetch.
+    const askModel = (model) => binding.fetch(new Request("https://ai-proxy/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, messages: parts, max_tokens: 1200 })
+    }));
+    const attempts = [cheapModel, visionModel].filter((model, index, all) => all.indexOf(model) === index);
+    let answered = null;
+    let failure = null;
+    for (const model of attempts) {
+      const price = modelPrice(model);
+      if (!price.ok) {
+        failure = { code: "model_over_price", message: price.reason, status: 402 };
+        continue;
       }
-      // Over the binding, not the workers.dev hostname: ambient and orproxy share a
-      // zone, and Cloudflare refuses that fetch with 1042.
-      const upstream = await binding.fetch(new Request("https://ai-proxy/api/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: visionModel, messages: parts })
-      }));
-      const raw = await upstream.text().catch(() => "");
-      let data2 = null;
+      let response;
       try {
-        data2 = JSON.parse(raw);
+        response = await askModel(model);
+      } catch (err) {
+        failure = { code: "upstream_error", message: String(err.message || err), status: 502 };
+        continue;
+      }
+      const raw = await response.text().catch(() => "");
+      let body = null;
+      try {
+        body = JSON.parse(raw);
       } catch {
-        data2 = null;
+        body = null;
       }
-      if (!upstream.ok) {
-        return json({ error: { code: "upstream_error", message: `ai-proxy ${upstream.status}: ${raw.slice(0, 200)}` } }, 502);
+      if (response.ok) {
+        answered = { body, model };
+        break;
       }
-      const parsed2 = extractPrefs(String(data2?.text || ""));
-      for (const preference of parsed2.learned) {
-        if (learned.some((entry) => entry.text === preference)) continue;
-        const saved = await savePref(env, preference);
-        if (saved) learned.push(saved);
-      }
-      return json({ text: parsed2.text, via: "ai-proxy:vision", model: data2?.model || visionModel, learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
-    } catch (err) {
-      return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
+      failure = { code: "upstream_error", message: `ai-proxy ${response.status}: ${raw.slice(0, 200)}`, status: 502 };
     }
+    if (!answered) {
+      return json({ error: { code: failure.code, message: failure.message } }, failure.status);
+    }
+    // Only the text model's reply is read for a standing preference; a vision model's
+    // aside about a picture is not a rule about how he wants things done.
+    const parsed2 = answered.model === cheapModel ? extractPrefs(String(answered.body?.text || "")) : { text: String(answered.body?.text || "").replace(/\n?PREF:.*$/gm, "").trim(), learned: [] };
+    for (const preference of parsed2.learned) {
+      if (learned.some((entry) => entry.text === preference)) continue;
+      const saved = await savePref(env, preference);
+      if (saved) learned.push(saved);
+    }
+    return json({ text: parsed2.text, via: answered.model === cheapModel ? "ai-proxy" : "ai-proxy:vision", model: answered.body?.model || answered.model, learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
   }
   const textModel = env.MODEL || "upstage/solar-mini-4-5";
   const textPrice = modelPrice(textModel);
