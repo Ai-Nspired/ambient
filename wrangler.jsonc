@@ -9,7 +9,11 @@
     { "binding": "ARA", "service": "ara" },
     // The vision model lives behind ai-proxy, whose key is already bound there.
     // Reached over a binding for the same 1042 reason as above.
-    { "binding": "AI_PROXY", "service": "ai-proxy" }
+    { "binding": "AI_PROXY", "service": "ai-proxy" },
+    // Bound in the dashboard on 2026-11-26; mirrored here so a build from this
+    // repository cannot drop it.
+    { "binding": "AI-PROXY", "service": "ai-proxy" },
+    { "binding": "CFMAIL", "service": "ai-n-email" }
   ],
   "kv_namespaces": [
     // His preferences and intentions: read before every answer, written when he
@@ -18,7 +22,7 @@
   ],
   "vars": {
     "MODEL": "upstage/solar-mini-4-5",
-    "VISION_MODEL": "~z-ai/glm-flash-latest",
+    "VISION_MODEL": "google/gemma-3-4b-it",
     "ACCENT": "#4a9eff"
   }
 }
