@@ -870,8 +870,10 @@ function beginHold() {
   if (kill.holding) return;
   haptics.hold();
 
-  // Pulse in front: a hold is its first pass, a line at a time, not the microphone.
-  if (focused === 'pulse') {
+  // The first pass is played, not used. While it is owed the wheel turns its pages and
+  // the microphone stays shut — no clip, no send, whatever slot happens to be in front.
+  // The moment the pass is off, this falls through and a hold is the microphone again.
+  if (pulseFirst()) {
     advanceOnboarding();
     return;
   }
@@ -1454,7 +1456,7 @@ const ONBOARD = [
   { line: 'Your key is who can hear you: everyone on this frequency who holds the same key hears what you say, and nobody else does.' },
   { line: 'What you send is saved on your device, and you can delete it there. The tray under the strip is where.' },
   { line: 'Tell me what you want and I will help you get there; if I miss, we will figure it out.' },
-  { line: 'That is our brief onboarding. Look for me in this app — I am all over the place.' },
+  { line: 'That is our brief onboarding. Look for me in this app — I am all over the place, and when you touch the other buttons I am still there. I am always going to have your back.' },
 ];
 
 let onboardStep = 0;
@@ -1718,4 +1720,11 @@ setStatus(`Hold the dial and speak — ${HOLD_MS} ms. Turn for options, press to
 
 // A page that has never met Pulse starts there, with the tile lit and nothing else
 // answering until the first pass is done.
-if (pulseFirst()) showOnboardPrompt();
+if (pulseFirst()) {
+  showOnboardPrompt();
+} else {
+  // Nothing is owed, so the page says who is behind it and then behaves like the system:
+  // hold the dial and what he says goes to Pulse.
+  questionEl.textContent = 'Pulse';
+  answerEl.textContent = 'Your pulse into the system. Hold the dial and I will take it from there.';
+}
