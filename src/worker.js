@@ -494,7 +494,7 @@ ${documents}` };
       const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: env.MODEL || "openai/gpt-4o-mini", messages: parts, max_tokens: 1200 })
+        body: JSON.stringify({ model: env.MODEL || "upstage/solar-mini-4-5", messages: parts, max_tokens: 1200 })
       });
       const data2 = await upstream.json().catch(() => null);
       if (!upstream.ok) {
