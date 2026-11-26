@@ -491,12 +491,25 @@ ${documents}` };
       (message, index) => index === messages.length - 1 && images.length ? { role: message.role, content: [{ type: "text", text: message.content }, ...images.map((url) => ({ type: "image_url", image_url: { url } }))] } : message
     );
     try {
-      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      let upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
         body: JSON.stringify({ model: env.MODEL || "upstage/solar-mini-4-5", messages: parts, max_tokens: 1200 })
       });
-      const data2 = await upstream.json().catch(() => null);
+      let data2 = await upstream.json().catch(() => null);
+      let proseModel = env.MODEL || "upstage/solar-mini-4-5";
+      // A picture the prose model cannot read ends the turn here, and only here does
+      // the vision model run: the cheap model is tried first so this path is
+      // exercised by a real refusal instead of being assumed to work.
+      if (!upstream.ok && images.length) {
+        proseModel = env.VISION_MODEL || "nex-agi/nex-n2.5-mini";
+        upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({ model: proseModel, messages: parts, max_tokens: 1200 })
+        });
+        data2 = await upstream.json().catch(() => null);
+      }
       if (!upstream.ok) {
         return json({ error: { code: "upstream_error", message: data2?.error?.message || `OpenRouter ${upstream.status}` } }, 502);
       }
@@ -506,7 +519,7 @@ ${documents}` };
         const saved = await savePref(env, preference);
         if (saved) learned.push(saved);
       }
-      return json({ text: parsed2.text, via: "openrouter", learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
+      return json({ text: parsed2.text, via: proseModel === (env.MODEL || "upstage/solar-mini-4-5") ? "openrouter" : "openrouter:vision", model: proseModel, learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
     } catch (err) {
       return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
     }
