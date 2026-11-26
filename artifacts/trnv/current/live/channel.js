@@ -120,6 +120,7 @@ let noteEl = null;
 let noteTimer = 0;
 let tray = null;
 let trayList = null;
+let whoEl = null;
 
 function note(text, bad) {
   if (!noteEl) return;
@@ -145,9 +146,18 @@ function paint() {
     keyBtn.dataset.set = key ? 'yes' : 'no';
     keyBtn.setAttribute('aria-label', key ? 'Channel key is set. Change it.' : 'No channel key. Set one.');
   }
+  // Who can hear this is the question the strip never answered: the key is the whole of
+  // the audience, so the strip says so in a line that stays put rather than a note.
+  if (whoEl) {
+    whoEl.textContent = !key
+      ? 'no key — nothing leaves this device'
+      : onAir
+        ? `keyed ${station} — anyone with your key hears this`
+        : 'off air — the station is quiet';
+  }
   if (strip) {
     strip.classList.toggle('live', onAir && Boolean(key));
-    strip.setAttribute('aria-label', `Channel ${station}, ${onAir ? 'on' : 'off'} air${key ? '' : ', no key'}`);
+    strip.setAttribute('aria-label', `Channel ${station}, ${onAir ? 'on' : 'off'} air${key ? ', anyone with this key hears it' : ', no key'}`);
   }
 }
 
@@ -159,6 +169,7 @@ function build() {
     <span id="chanMark"></span>
     <button type="button" id="chanKey">key</button>
     <button type="button" id="chanOn" aria-pressed="true">on air</button>
+    <span id="chanWho"></span>
     <span id="chanNote" role="status"></span>
     <div id="chanTray" role="list" aria-label="Clips on this frequency"><div id="chanClips"></div></div>
   `;
@@ -174,6 +185,9 @@ function build() {
     #chan #chanKey, #chan #chanOn { font-size: 10px; letter-spacing: .14em; text-transform: uppercase }
     #chan #chanKey[data-set="yes"] { color: var(--ink) }
     #chan #chanOn[aria-pressed="true"] { color: var(--lit); border-color: var(--lit) }
+    #chan #chanWho { grid-column: 1 / -1; font-size: 10px; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--dim); text-align: center }
+    #chan.live #chanWho { color: var(--lit) }
     #chan #chanNote { grid-column: 1 / -1; font-size: 10px; letter-spacing: .1em;
       text-transform: uppercase; color: var(--dim); min-height: 0 }
     #chan #chanNote.bad { color: #f4511e }
@@ -199,6 +213,7 @@ function build() {
   power = strip.querySelector('#chanOn');
   keyBtn = strip.querySelector('#chanKey');
   noteEl = strip.querySelector('#chanNote');
+  whoEl = strip.querySelector('#chanWho');
   tray = strip.querySelector('#chanTray');
   trayList = strip.querySelector('#chanClips');
 

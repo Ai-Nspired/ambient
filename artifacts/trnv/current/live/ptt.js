@@ -1311,7 +1311,12 @@ function showCardStack() {
 // in front and the press walks it forward a line at a time: typed on the card, at the
 // speed of reading, with a pulse as each line lands. Nothing is asked and nothing is
 // sent, and until it is done the other slots answer "Pulse first".
+// What she says about herself, in the first pass and every time the slot is pressed
+// afterwards: who is speaking, what she is for, and what ambient does not mean.
+const PULSE_SAYS = 'I am your ambient assistant. I am not going to tell you how to make pancakes; I keep track of things for you. And just because I am ambient does not mean I am passive: I have your back.';
+
 const ONBOARD = [
+  { line: PULSE_SAYS },
   { line: 'Pulse is your familiar. It comes first, in this medium and every other one we build.' },
   { line: 'The circle in the middle of the wheel is Pulse itself. Your thumb is on the heartbeat, and it beats when the wheel has something to say. Touch it to move this along.' },
   { line: 'It says a thing in pulses before it says it in words, and it explains what is in front of you.' },
@@ -1319,7 +1324,7 @@ const ONBOARD = [
   { line: 'Two quick beats is no.', answer: 'no' },
   { line: 'Hold the dial anywhere and speak. A short message is enough: one thought, one sentence.' },
   { line: 'Turn the wheel and the station moves. That number is the frequency you are on.' },
-  { line: 'Your key is what lets the others on that frequency hear you. Whoever holds the same key hears what you hold down and say.' },
+  { line: 'Your key is who can hear you: everyone on this frequency who holds the same key hears what you hold down and say. With no key, nothing leaves this device.' },
   { line: 'Every recording is kept on your device. The tray under the strip can save one out to the device, or delete it. The clips are yours to keep or drop.' },
   { line: 'What you say becomes the card in front of you. The Cards slot walks the cards this session has made, newest first.' },
   { line: 'Settings holds voice, haptics, tips and this first pass. Each one can be turned off, and turned back on.' },
@@ -1354,6 +1359,17 @@ function showOnboardPrompt() {
   setOptions([]);
   setStatus('Pulse first · press it, or touch the middle.');
   speak('Press Pulse to start');
+}
+
+/** The post, whenever the slot is pressed after the first pass: the same words. */
+function showPulseSays() {
+  cardEl.classList.add('live');
+  questionEl.textContent = 'Pulse';
+  metaEl.textContent = '';
+  setOptions([]);
+  typeInto(answerEl, PULSE_SAYS);
+  speak(PULSE_SAYS);
+  setStatus(`Pulse${hint(' · press the slot again to hear it again')}`);
 }
 
 function advanceOnboarding() {
@@ -1462,7 +1478,11 @@ async function pressSlot(slug) {
     focused = slug;
     const title = data.focus && data.focus.title ? data.focus.title : slug;
     if (slug === 'cards') showCardStack();
-    else if (slug === 'pulse') advanceOnboarding();
+    else if (slug === 'pulse') {
+      // In practice the slot says who she is; the first pass only runs while it is owed.
+      if (onboarded) showPulseSays();
+      else advanceOnboarding();
+    }
     else if (slug === 'settings') showSettings();
     else {
       setStatus(`${title} in front${hint(' · hold for the second face')}`);
