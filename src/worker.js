@@ -418,7 +418,7 @@ const TOKEN_PRICES = {
   "~z-ai/glm-flash-latest": { in: 0.036, out: 0.081 },
   "z-ai/glm-5.3-flash": { in: 0.036, out: 0.081 },
   "google/gemma-3-4b-it": { in: 0.04, out: 0.05 },
-  "nex-agi/nex-n2.5-mini": { in: 0.025, out: 0.1 }
+  "google/gemma-3-4b-it": { in: 0.025, out: 0.1 }
 };
 function modelPrice(model) {
   const price = TOKEN_PRICES[model] || null;
@@ -554,7 +554,7 @@ ${documents}` };
   // image turn takes this path.
   const unread = files.filter((file) => file.image && file.dataUrl).map((file) => file.dataUrl);
   if (unread.length) {
-    const visionModel = env.VISION_MODEL || "nex-agi/nex-n2.5-mini";
+    const visionModel = env.VISION_MODEL || "google/gemma-3-4b-it";
     const parts = messages.map(
       (message, index) => index === messages.length - 1 && unread.length ? { role: message.role, content: [{ type: "text", text: message.content }, ...unread.map((url) => ({ type: "image_url", image_url: { url } }))] } : message
     );
