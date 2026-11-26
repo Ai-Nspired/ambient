@@ -540,9 +540,15 @@ ${documents}` };
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: visionModel, messages: parts })
       });
-      const data2 = await upstream.json().catch(() => null);
+      const raw = await upstream.text().catch(() => "");
+      let data2 = null;
+      try {
+        data2 = JSON.parse(raw);
+      } catch {
+        data2 = null;
+      }
       if (!upstream.ok) {
-        return json({ error: { code: "upstream_error", message: data2?.error?.message || `orproxy ${upstream.status}` } }, 502);
+        return json({ error: { code: "upstream_error", message: `orproxy ${upstream.status}: ${raw.slice(0, 200)}` } }, 502);
       }
       const parsed2 = extractPrefs(String(data2?.text || ""));
       for (const preference of parsed2.learned) {
