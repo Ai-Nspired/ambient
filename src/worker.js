@@ -15,7 +15,7 @@ var CLIENT = String.raw`(function () {
   var thread = [];
   var files = [];
   var busy = false;
-  // Her own voice, separate from mind's: switched here, remembered here.
+  // Her own voice, separate from the engine's: switched here, remembered here.
   var spoken = null;
   function voiceOn() { try { return localStorage.getItem('amb.voice') === 'on'; } catch (err) { return false; } }
   function setVoice(on) { try { localStorage.setItem('amb.voice', on ? 'on' : 'off'); } catch (err) {} }
@@ -407,6 +407,35 @@ function extractPrefs(text) {
   return { text: kept.join("\n").trim(), learned };
 }
 __name(extractPrefs, "extractPrefs");
+// Nothing he asks may cost more than this in one turn, input and output together.
+// It is checked before the call, so the ceiling is a refusal rather than a surprise
+// on the bill.
+const TURN_BUDGET_USD = 0.09;
+// USD per million tokens. A model that is not priced here is charged at the dearest
+// rate this account can reach, so an unknown model is refused rather than assumed cheap.
+const TOKEN_PRICES = {
+  "upstage/solar-mini-4-5": { in: 0.01, out: 0.04 },
+  "nex-agi/nex-n2.5-mini": { in: 0.025, out: 0.1 }
+};
+const UNPRICED = { in: 1, out: 1 };
+function turnCost(model, messages, maxTokens) {
+  const price = TOKEN_PRICES[model] || UNPRICED;
+  let chars = 0;
+  let media = 0;
+  for (const message of messages) {
+    if (typeof message.content === "string") {
+      chars += message.content.length;
+      continue;
+    }
+    for (const part of Array.isArray(message.content) ? message.content : []) {
+      if (part && typeof part.text === "string") chars += part.text.length;
+      else if (part && ["image_url", "input_audio", "video_url"].includes(part.type)) media += 1;
+    }
+  }
+  // Four characters to a token and a flat charge per image: both overestimate on purpose.
+  const input = chars / 4 + media * 1600;
+  return (input * price.in + maxTokens * price.out) / 1e6;
+}
 function prefsBlock(prefs) {
   if (!prefs.length) return "";
   return "\n\nWhat he has already told you he wants, in his own words:\n" + prefs.slice(0, 30).map((pref) => "- " + pref.text).join("\n") + "\n\nThese are standing. Follow them without being reminded, and never argue them down.";
@@ -524,16 +553,20 @@ ${documents}` };
       return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
     }
   }
-  // No OpenRouter key is bound on this Worker, and the mind forward carries no image
-  // at all, so a picture would end the turn blind. It is read by the proxy's vision
-  // model instead - the same upstream the deciders already use - and only an image
-  // turn takes this path. Text still goes to mind exactly as before.
+  // No OpenRouter key is bound on this Worker, and the plain text path carries no
+  // image at all, so a picture would end the turn blind. It is read by the proxy's
+  // vision model instead - the same upstream the deciders already use - and only an
+  // image turn takes this path.
   const unread = files.filter((file) => file.image && file.dataUrl).map((file) => file.dataUrl);
   if (unread.length) {
     const visionModel = env.VISION_MODEL || "nex-agi/nex-n2.5-mini";
     const parts = messages.map(
       (message, index) => index === messages.length - 1 && unread.length ? { role: message.role, content: [{ type: "text", text: message.content }, ...unread.map((url) => ({ type: "image_url", image_url: { url } }))] } : message
     );
+    const visionCost = turnCost(visionModel, parts, 1200);
+    if (visionCost > TURN_BUDGET_USD) {
+      return json({ error: { code: "over_budget", message: `About ${visionCost.toFixed(4)} for this turn, over the ${TURN_BUDGET_USD} ceiling.` } }, 402);
+    }
     try {
       const binding = env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
       if (!binding) {
@@ -562,19 +595,29 @@ ${documents}` };
         const saved = await savePref(env, preference);
         if (saved) learned.push(saved);
       }
-      return json({ text: parsed2.text, via: "orproxy:vision", model: data2?.model || visionModel, learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
+      return json({ text: parsed2.text, via: "ai-proxy:vision", model: data2?.model || visionModel, learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
     } catch (err) {
       return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
     }
   }
-  const payload = JSON.stringify({
-    thread,
-    context: (context + prefsBlock(prefs)).slice(0, 12e3),
-    files: files.map((file) => ({ name: file.name, url: "", contentType: file.image ? "image/*" : "text/plain", text: file.text, image: false }))
-  });
+  const textModel = env.MODEL || "upstage/solar-mini-4-5";
+  const textCost = turnCost(textModel, messages, 1200);
+  if (textCost > TURN_BUDGET_USD) {
+    return json({ error: { code: "over_budget", message: `About ${textCost.toFixed(4)} for this turn, over the ${TURN_BUDGET_USD} ceiling.` } }, 402);
+  }
+  // The engine is ai-proxy, over a binding: it holds the upstream key, and ambient and
+  // orproxy share a zone, so a workers.dev fetch to it is refused with Cloudflare 1042.
+  const engine = env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
+  if (!engine) {
+    return json({ error: { code: "proxy_unbound", message: "AI_PROXY binding is missing; there is no engine to answer with." } }, 502);
+  }
   let forwarded;
   try {
-    forwarded = env?.MIND && typeof env.MIND.fetch === "function" ? await env.MIND.fetch(new Request("https://mind/api/assist", { method: "POST", headers: { "content-type": "application/json" }, body: payload })) : await fetch(env?.UPSTREAM || "https://mind.ai-n.workers.dev/api/assist", { method: "POST", headers: { "content-type": "application/json" }, body: payload });
+    forwarded = await engine.fetch(new Request("https://ai-proxy/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: textModel, messages, max_tokens: 1200 })
+    }));
   } catch (err) {
     return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
   }
@@ -595,7 +638,7 @@ ${documents}` };
     const saved = await savePref(env, preference);
     if (saved) learned.push(saved);
   }
-  return json({ text: parsed.text, via: "upstream", learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed.text) });
+  return json({ text: parsed.text, via: "ai-proxy", model: data?.model || textModel, learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed.text) });
 }
 __name(handleAmbient, "handleAmbient");
 async function decideFirst(env, ask, { thread = [], prefs = [], files = [], looking = "" } = {}) {

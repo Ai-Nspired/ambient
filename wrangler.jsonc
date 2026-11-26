@@ -3,9 +3,6 @@
   "main": "src/worker.js",
   "compatibility_date": "2026-11-01",
   "services": [
-    // Workers may not fetch another workers.dev hostname (Cloudflare 1042),
-    // so mind is reached over a binding instead of a URL.
-    { "binding": "MIND", "service": "mind" },
     // The dock is ARA's extension, so her pass runs here before anything is
     // generated — over a binding, because a workers.dev Worker may not fetch
     // another workers.dev hostname (Cloudflare 1042).
@@ -20,8 +17,7 @@
     { "binding": "PREFS", "id": "4a9bfbffb4d440cba86badc508e2045a" }
   ],
   "vars": {
-    "UPSTREAM": "https://mind.ai-n.workers.dev/api/assist",
-    "MODEL": "openai/gpt-4o-mini",
+    "MODEL": "upstage/solar-mini-4-5",
     "VISION_MODEL": "nex-agi/nex-n2.5-mini",
     "ACCENT": "#4a9eff"
   }
