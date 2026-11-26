@@ -18,7 +18,7 @@
   ],
   "vars": {
     "MODEL": "upstage/solar-mini-4-5",
-    "VISION_MODEL": "nex-agi/nex-n2.5-mini",
+    "VISION_MODEL": "~z-ai/glm-flash-latest",
     "ACCENT": "#4a9eff"
   }
 }

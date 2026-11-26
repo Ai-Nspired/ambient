@@ -407,34 +407,28 @@ function extractPrefs(text) {
   return { text: kept.join("\n").trim(), learned };
 }
 __name(extractPrefs, "extractPrefs");
-// Nothing he asks may cost more than this in one turn, input and output together.
-// It is checked before the call, so the ceiling is a refusal rather than a surprise
-// on the bill.
-const TURN_BUDGET_USD = 0.09;
-// USD per million tokens. A model that is not priced here is charged at the dearest
-// rate this account can reach, so an unknown model is refused rather than assumed cheap.
+// The price a model may carry, in and out, per million tokens. This gates the model
+// that makes the call, not how many calls are made: a model priced above it is refused
+// by name before it is ever reached.
+const MAX_MODEL_USD_PER_M = 0.09;
+// USD per million tokens, checked against the catalogue. A model that is not listed here
+// is treated as unpriced and refused, so a new model cannot slip in without a price.
 const TOKEN_PRICES = {
   "upstage/solar-mini-4-5": { in: 0.01, out: 0.04 },
+  "~z-ai/glm-flash-latest": { in: 0.036, out: 0.081 },
+  "google/gemma-3-4b-it": { in: 0.04, out: 0.05 },
   "nex-agi/nex-n2.5-mini": { in: 0.025, out: 0.1 }
 };
-const UNPRICED = { in: 1, out: 1 };
-function turnCost(model, messages, maxTokens) {
-  const price = TOKEN_PRICES[model] || UNPRICED;
-  let chars = 0;
-  let media = 0;
-  for (const message of messages) {
-    if (typeof message.content === "string") {
-      chars += message.content.length;
-      continue;
-    }
-    for (const part of Array.isArray(message.content) ? message.content : []) {
-      if (part && typeof part.text === "string") chars += part.text.length;
-      else if (part && ["image_url", "input_audio", "video_url"].includes(part.type)) media += 1;
-    }
-  }
-  // Four characters to a token and a flat charge per image: both overestimate on purpose.
-  const input = chars / 4 + media * 1600;
-  return (input * price.in + maxTokens * price.out) / 1e6;
+function modelPrice(model) {
+  const price = TOKEN_PRICES[model] || null;
+  if (!price) return { ok: false, reason: `${model} has no price on record`, in: null, out: null };
+  const over = price.in > MAX_MODEL_USD_PER_M || price.out > MAX_MODEL_USD_PER_M;
+  return {
+    ok: !over,
+    reason: over ? `${model} is $${price.in}/$${price.out} per million tokens, over the $${MAX_MODEL_USD_PER_M} ceiling` : "",
+    in: price.in,
+    out: price.out
+  };
 }
 function prefsBlock(prefs) {
   if (!prefs.length) return "";
@@ -563,9 +557,9 @@ ${documents}` };
     const parts = messages.map(
       (message, index) => index === messages.length - 1 && unread.length ? { role: message.role, content: [{ type: "text", text: message.content }, ...unread.map((url) => ({ type: "image_url", image_url: { url } }))] } : message
     );
-    const visionCost = turnCost(visionModel, parts, 1200);
-    if (visionCost > TURN_BUDGET_USD) {
-      return json({ error: { code: "over_budget", message: `About ${visionCost.toFixed(4)} for this turn, over the ${TURN_BUDGET_USD} ceiling.` } }, 402);
+    const visionPrice = modelPrice(visionModel);
+    if (!visionPrice.ok) {
+      return json({ error: { code: "model_over_price", message: visionPrice.reason } }, 402);
     }
     try {
       const binding = env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
