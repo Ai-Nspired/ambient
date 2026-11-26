@@ -526,7 +526,7 @@ ${documents}` };
       // the vision model run: the cheap model is tried first so this path is
       // exercised by a real refusal instead of being assumed to work.
       if (!upstream.ok && images.length) {
-        proseModel = env.VISION_MODEL || "nex-agi/nex-n2.5-mini";
+        proseModel = env.VISION_MODEL || "google/gemma-3-4b-it";
         upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
