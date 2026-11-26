@@ -415,10 +415,10 @@ const MAX_MODEL_USD_PER_M = 0.09;
 // is treated as unpriced and refused, so a new model cannot slip in without a price.
 const TOKEN_PRICES = {
   "upstage/solar-mini-4-5": { in: 0.01, out: 0.04 },
+  "google/gemma-3-4b-it": { in: 0.04, out: 0.05 },
   "~z-ai/glm-flash-latest": { in: 0.036, out: 0.081 },
   "z-ai/glm-5.3-flash": { in: 0.036, out: 0.081 },
-  "google/gemma-3-4b-it": { in: 0.04, out: 0.05 },
-  "google/gemma-3-4b-it": { in: 0.025, out: 0.1 }
+  "nex-agi/nex-n2.5-mini": { in: 0.025, out: 0.1 }
 };
 function modelPrice(model) {
   const price = TOKEN_PRICES[model] || null;
