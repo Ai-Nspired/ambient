@@ -595,9 +595,9 @@ ${documents}` };
     }
   }
   const textModel = env.MODEL || "upstage/solar-mini-4-5";
-  const textCost = turnCost(textModel, messages, 1200);
-  if (textCost > TURN_BUDGET_USD) {
-    return json({ error: { code: "over_budget", message: `About ${textCost.toFixed(4)} for this turn, over the ${TURN_BUDGET_USD} ceiling.` } }, 402);
+  const textPrice = modelPrice(textModel);
+  if (!textPrice.ok) {
+    return json({ error: { code: "model_over_price", message: textPrice.reason } }, 402);
   }
   // The engine is ai-proxy, over a binding: it holds the upstream key, and ambient and
   // orproxy share a zone, so a workers.dev fetch to it is refused with Cloudflare 1042.
