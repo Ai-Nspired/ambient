@@ -524,6 +524,37 @@ ${documents}` };
       return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
     }
   }
+  // No OpenRouter key is bound on this Worker, and the mind forward carries no image
+  // at all, so a picture would end the turn blind. It is read by the proxy's vision
+  // model instead - the same upstream the deciders already use - and only an image
+  // turn takes this path. Text still goes to mind exactly as before.
+  const unread = files.filter((file) => file.image && file.dataUrl).map((file) => file.dataUrl);
+  if (unread.length) {
+    const visionModel = env.VISION_MODEL || "nex-agi/nex-n2.5-mini";
+    const parts = messages.map(
+      (message, index) => index === messages.length - 1 && unread.length ? { role: message.role, content: [{ type: "text", text: message.content }, ...unread.map((url) => ({ type: "image_url", image_url: { url } }))] } : message
+    );
+    try {
+      const upstream = await fetch("https://orproxy.ai-n.workers.dev/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: visionModel, messages: parts })
+      });
+      const data2 = await upstream.json().catch(() => null);
+      if (!upstream.ok) {
+        return json({ error: { code: "upstream_error", message: data2?.error?.message || `orproxy ${upstream.status}` } }, 502);
+      }
+      const parsed2 = extractPrefs(String(data2?.text || ""));
+      for (const preference of parsed2.learned) {
+        if (learned.some((entry) => entry.text === preference)) continue;
+        const saved = await savePref(env, preference);
+        if (saved) learned.push(saved);
+      }
+      return json({ text: parsed2.text, via: "orproxy:vision", model: data2?.model || visionModel, learned, decision: face, outcome: await reportOutcome(env, face?.id ?? null, parsed2.text) });
+    } catch (err) {
+      return json({ error: { code: "upstream_error", message: String(err.message || err) } }, 502);
+    }
+  }
   const payload = JSON.stringify({
     thread,
     context: (context + prefsBlock(prefs)).slice(0, 12e3),
