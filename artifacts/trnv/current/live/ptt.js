@@ -1318,7 +1318,7 @@ function showSettings() {
   answerEl.textContent = bits.join(' · ');
   metaEl.textContent = '';
   setOptions(choices);
-  setStatus(`Settings${hint(' · turn and press')}`);
+  setStatus(`Settings${hint(' · turn and press.')}`);
 }
 
 function applySetting(choice) {
