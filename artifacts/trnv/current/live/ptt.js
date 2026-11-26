@@ -988,8 +988,10 @@ dial.addEventListener('pointerup', (event) => {
       // The heartbeat is the next-line control while the first pass is running: the
       // circle is where his thumb already rests, so touching it moves the writing on.
       if (pulseFirst() && onHeart(pointOf(event))) {
+        // A brief tap says nothing, which is what the pass teaches: the page turns on a hold.
         focused = 'pulse';
-        advanceOnboarding();
+        haptics.pulse('soft');
+        setStatus('A tap does nothing here — hold for the next page.');
         drawSlotsFromBank();
       }
       // A killed page asks nothing: the wheel can be walked, never used to send.
@@ -1196,7 +1198,15 @@ const SLOT_HOLD_MS = 500;
 let bank = null;
 let focused = null;
 // A page that has never been through Pulse's first pass has to: the tile is lit and the
-// other slots answer "Pulse first" until it has. Settings can turn it back on.
+// other slots answer "Pulse first" until it has. Settings can turn it back on. A new pass
+// asks a device that has been through an older one exactly once, so the new words are
+// read rather than assumed.
+const PASS_VERSION = 'pulse-2';
+if (store.get('trnv.pass.run', '') !== PASS_VERSION) {
+  store.set('trnv.pass.run', PASS_VERSION);
+  store.set('trnv.onboarded', 'no');
+  store.set('trnv.pass', 'on');
+}
 let onboarded = store.get('trnv.onboarded', '') === 'yes';
 
 async function loadSlots() {
@@ -1251,6 +1261,18 @@ function drawSlots(apps) {
 // button would have made Music a copy of this file's press; at the panel there is one
 // gate, one soft pulse, one hard pulse and one lit tile, whichever slot it is. What a
 // slot then does is `pressSlot`'s, and Music's lens opens underneath it as before.
+// A press on a slot is a pulse too: the tile keeps time under the thumb for as long as
+// the finger is there, so the four buttons beat like the middle of the wheel does.
+const tileStyle = document.createElement('style');
+tileStyle.textContent = `
+  .slot.held { animation: tilePulse .85s ease-in-out infinite; }
+  @keyframes tilePulse {
+    0%, 100% { border-color: var(--line); box-shadow: 0 0 0 0 rgba(232, 163, 61, 0); }
+    50% { border-color: var(--lit); box-shadow: 0 0 0 1px var(--lit) inset, 0 0 18px -4px var(--lit); }
+  }
+`;
+document.head.appendChild(tileStyle);
+
 let slotPress = { slug: '', held: false, timer: 0 };
 
 const slotOf = (event) => {
@@ -1261,6 +1283,7 @@ const slotOf = (event) => {
 const forgetPress = () => {
   clearTimeout(slotPress.timer);
   slotPress = { slug: '', held: false, timer: 0 };
+  for (const beat of slotsEl.querySelectorAll('.slot.held')) beat.classList.remove('held');
 };
 
 slotsEl.addEventListener(
@@ -1280,6 +1303,8 @@ slotsEl.addEventListener(
       return;
     }
     slotPress.slug = slug;
+    const tile = event.target && event.target.closest ? event.target.closest('.slot') : null;
+    if (tile) tile.classList.add('held');
     haptics.pulse('soft');
     slotPress.timer = setTimeout(() => {
       slotPress.held = true;
@@ -1413,22 +1438,23 @@ buildPad();
 // sent, and until it is done the other slots answer "Pulse first".
 // What she says about herself, in the first pass and every time the slot is pressed
 // afterwards: who is speaking, what she is for, and what ambient does not mean.
-const PULSE_SAYS = 'I am your ambient assistant. I am not going to tell you how to make pancakes; I keep track of things for you. And just because I am ambient does not mean I am passive: I have your back.';
+const PULSE_SAYS = 'I am an ambient assistant. In the system you will know me as your Pulse — think of me as your pulse, your pulse into the system. I do not tell you how to make pancakes. I just like the way they taste. Sometimes.';
 
 const ONBOARD = [
   { line: PULSE_SAYS },
-  { line: 'Pulse is your familiar. It comes first, in this medium and every other one we build.' },
-  { line: 'The circle in the middle of the wheel is Pulse itself. Your thumb is on the heartbeat, and it beats when the wheel has something to say. Touch it to move this along.' },
-  { line: 'It says a thing in pulses before it says it in words, and it explains what is in front of you.' },
+  { line: 'The pulse keeps track of what you prefer, so you do not have to say it twice.' },
+  { line: 'The circle in the middle of the wheel is that pulse. Your thumb is already there, and it beats when the wheel has something to say.' },
   { line: 'Two answers before words. One long beat is yes.', answer: 'yes' },
   { line: 'Two quick beats is no.', answer: 'no' },
-  { line: 'Hold the dial anywhere and speak. A short message is enough: one thought, one sentence.' },
-  { line: 'Turn the wheel to 443.0. I keep a frequency there for you, and the tray under the strip is what is recorded on it.', tuneTo: '443.0' },
-  { line: 'Your key is who can hear you: everyone on this frequency who holds the same key hears what you hold down and say. With no key, nothing leaves this device.' },
-  { line: 'Every recording is kept on your device. The tray under the strip can save one out to the device, or delete it. The clips are yours to keep or drop.' },
-  { line: 'Settings holds voice, haptics, tips and this first pass. Each one can be turned off, and turned back on.' },
-  { line: 'The dot on the rim is the kill: a finger on it, a full circle.' },
-  { line: 'Four slots: Pulse, Music, Cards, Settings. Pulse is the one that explains the rest.' },
+  { line: 'This is the onboarding. Tap briefly and nothing happens; hold a moment and the page turns.' },
+  { line: 'Hold the dial and say a short message. Pulse takes it first, and logs what you want.' },
+  { line: 'If it gets it wrong, correct it: the correction is logged too, and the logs are read before every interaction. That is the loop.' },
+  { line: 'It gets better with you, and you with it. That is what symbiotic means.' },
+  { line: 'Let us practise the communicator. The wheel does many things and picks its own lens; for now, send a message on a frequency.', tuneTo: '443.0' },
+  { line: 'Your key is who can hear you: everyone on this frequency who holds the same key hears what you say, and nobody else does.' },
+  { line: 'What you send is saved on your device, and you can delete it there. The tray under the strip is where.' },
+  { line: 'Tell me what you want and I will help you get there; if I miss, we will figure it out.' },
+  { line: 'That is our brief onboarding. Look for me in this app — I am all over the place.' },
 ];
 
 let onboardStep = 0;
@@ -1452,10 +1478,10 @@ function showOnboardPrompt() {
   onboardStep = 0;
   cardEl.classList.add('live');
   questionEl.textContent = 'Pulse';
-  answerEl.textContent = 'Press Pulse to start, or touch the circle in the middle.';
+  answerEl.textContent = 'Press Pulse to start.';
   metaEl.textContent = '';
   setOptions([]);
-  setStatus('Pulse first · press it, or touch the middle.');
+  setStatus('Pulse first · press it.');
   speak('Press Pulse to start');
 }
 
@@ -1536,7 +1562,7 @@ function advanceOnboarding() {
   // A step can name a station to find; the rest of the pass waits for him to arrive.
   if (step.tuneTo) watchTune(step);
   else stopTuneWatch();
-  setStatus(onboardStep >= ONBOARD.length ? 'Press Pulse once more to finish.' : 'Press Pulse for the next line.');
+  setStatus(onboardStep >= ONBOARD.length ? 'Hold once more to finish.' : 'Hold for the next page.');
 }
 
 function endOnboarding() {
@@ -1659,6 +1685,11 @@ async function pressSlot(slug) {
 }
 
 function holdSlot(slug, underEl) {
+  // The first pass turns on a hold, wherever the hold lands: the slot or the wheel.
+  if (pulseFirst() && slug === 'pulse') {
+    advanceOnboarding();
+    return;
+  }
   if (!bank) return;
   const result = bank.hold(slug);
   const face = bank.face(slug);
