@@ -555,7 +555,10 @@ async function decideFirst(env, ask, { thread = [], prefs = [], files = [], look
     cards: files.filter((file) => file.name).map((file, index) => ({
       id: `file:${index}`,
       label: `Attached ${file.image ? "image" : "document"}: ${file.name}`
-    }))
+    })),
+    // The picture itself: the data URL encoded once above for the prose call.
+    // The decider reads the same string, so an image is never fetched or encoded twice.
+    images: files.filter((file) => file.image && file.dataUrl).slice(0, 4).map((file) => file.dataUrl)
   };
   try {
     const response = await binding.fetch(
