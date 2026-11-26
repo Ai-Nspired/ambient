@@ -781,6 +781,17 @@ function pointOf(event) {
   };
 }
 
+/**
+ * The heartbeat's own target. The circle is 34% of the wheel; the target is wider, so a
+ * thumb that lands near it is on it — the same bargain the kill's dot makes.
+ */
+function onHeart(point) {
+  const dx = point.x - point.centreX;
+  const dy = point.y - point.centreY;
+  const reach = (dial.clientWidth || 300) * 0.22;
+  return Math.hypot(dx, dy) <= reach;
+}
+
 let dotHeld = false;
 let dotTimer = null;
 
@@ -931,7 +942,7 @@ dial.addEventListener('pointerdown', () => {
   tone.resume();
 });
 
-dial.addEventListener('pointerup', () => {
+dial.addEventListener('pointerup', (event) => {
   clearInterval(pollTimer);
   dial.classList.remove('armed');
 
@@ -958,8 +969,15 @@ dial.addEventListener('pointerup', () => {
       haptics.send();
       stopRecording();
     } else if (decided && decided.type === 'tap' && kill.state !== 'killed') {
+      // The heartbeat is the next-line control while the first pass is running: the
+      // circle is where his thumb already rests, so touching it moves the writing on.
+      if (!onboarded && onHeart(pointOf(event))) {
+        focused = 'pulse';
+        advanceOnboarding();
+        drawSlotsFromBank();
+      }
       // A killed page asks nothing: the wheel can be walked, never used to send.
-      if (options.length) choose(options[index]);
+      else if (options.length) choose(options[index]);
       else if (card) speak(card.answer || '');
     }
   }
@@ -1295,12 +1313,16 @@ function showCardStack() {
 // sent, and until it is done the other slots answer "Pulse first".
 const ONBOARD = [
   { line: 'Pulse is your familiar. It comes first, in this medium and every other one we build.' },
-  { line: 'The circle in the middle of the wheel is Pulse itself. Your thumb is on the heartbeat, and it beats when the wheel has something to say.' },
+  { line: 'The circle in the middle of the wheel is Pulse itself. Your thumb is on the heartbeat, and it beats when the wheel has something to say. Touch it to move this along.' },
   { line: 'It says a thing in pulses before it says it in words, and it explains what is in front of you.' },
   { line: 'Two answers before words. One long beat is yes.', answer: 'yes' },
   { line: 'Two quick beats is no.', answer: 'no' },
-  { line: 'Hold the dial anywhere and speak. What you say becomes the card in front of you.' },
-  { line: 'Turn the wheel to walk what it offers. Press to take one; the card beneath it stays.' },
+  { line: 'Hold the dial anywhere and speak. A short message is enough: one thought, one sentence.' },
+  { line: 'Turn the wheel and the station moves. That number is the frequency you are on.' },
+  { line: 'Your key is what lets the others on that frequency hear you. Whoever holds the same key hears what you hold down and say.' },
+  { line: 'Every recording is kept on your device. The tray under the strip can save one out to the device, or delete it. The clips are yours to keep or drop.' },
+  { line: 'What you say becomes the card in front of you. The Cards slot walks the cards this session has made, newest first.' },
+  { line: 'Settings holds voice, haptics, tips and this first pass. Each one can be turned off, and turned back on.' },
   { line: 'Pulse takes the work ARA did: it takes in what you prefer and what you mean, keeps explicit intent explicit, and that is the learning loop.' },
   { line: 'The dot on the rim is the kill: a finger on it, a full circle.' },
   { line: 'Four slots: Pulse, Music, Cards, Settings. Pulse is the one that explains the rest.' },
@@ -1327,10 +1349,10 @@ function showOnboardPrompt() {
   onboardStep = 0;
   cardEl.classList.add('live');
   questionEl.textContent = 'Pulse';
-  answerEl.textContent = 'Press Pulse to start.';
+  answerEl.textContent = 'Press Pulse to start, or touch the circle in the middle.';
   metaEl.textContent = '';
   setOptions([]);
-  setStatus('Pulse first · press it.');
+  setStatus('Pulse first · press it, or touch the middle.');
   speak('Press Pulse to start');
 }
 
