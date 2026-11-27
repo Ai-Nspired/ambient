@@ -18,6 +18,9 @@ var CLIENT = String.raw`(function () {
   // TRNV's skin, asked for by the page that carries it. Absent, the dock is what
   // every other host gets.
   var skin = (me && me.dataset && me.dataset.skin) || '';
+  // The wheels from the dial, carried into the dock. Asked for explicitly, because a
+  // host that never asked should not get a second way to do what the panel does.
+  var wheels = Boolean(me && me.dataset && me.dataset.wheels === 'true');
   // A surface, not a corner of one. The deck takes the whole viewport and gives
   // the page back when it is closed.
   var layout = (me && me.dataset && me.dataset.layout) || '';
@@ -86,6 +89,22 @@ var CLIENT = String.raw`(function () {
     '.amb-alert .amb-x{align-self:flex-end;background:none;border:none;color:#9aa4b2;font-size:11px;cursor:pointer;padding:0}',
     '.amb-turn.err{border-left-color:#d32f2f;color:#ffd7d7}',
     '.amb-round.alert{background:#d32f2f;border-color:#d32f2f;color:#fff}',
+    // The jog, in the dock: the same detents, the same pulse, sized to sit above
+    // the input row. Opt-in, so a host that wants only the panel keeps only the panel.
+    '.amb-jogbar{display:flex;align-items:center;gap:10px;padding:8px 12px 0;border-top:1px solid #2a2f38}',
+    '.amb-skin-trnv .amb-jogbar{border-top:1px solid #161d28;padding:8px 10px 0}',
+    '.amb-wheel{position:relative;width:88px;height:88px;flex:0 0 auto;border-radius:50%;background:radial-gradient(circle at 50% 38%,#0d131c 0 55%,#06090e 56% 100%);border:1px solid #2a2f38;touch-action:none;user-select:none;-webkit-user-select:none}',
+    '.amb-skin-trnv .amb-wheel{border-color:#1b2230}',
+    '.amb-wheel .rotor{position:absolute;inset:0;border-radius:50%;cursor:grab}',
+    '.amb-wheel .tick{position:absolute;left:50%;top:3px;width:1.5px;height:5px;margin-left:-.75px;background:#1e2734;border-radius:1px;transform-origin:50% 41px}',
+    '.amb-wheel .tick.on{background:var(--amb-accent);height:9px;top:1px}',
+    '.amb-wheel .core{position:absolute;inset:15px;border-radius:50%;background:linear-gradient(#0a0f16,#06090e);border:1px solid #1e2734;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;text-align:center;padding:4px;cursor:pointer;font:9px/1.15 ui-monospace,SFMono-Regular,Menlo,monospace;color:#dbe3ef}',
+    '.amb-wheel .core .sub{font:6.5px/1 var(--mono,ui-monospace);letter-spacing:.14em;text-transform:uppercase;color:#59616f}',
+    '.amb-wheel.held .core{border-color:var(--amb-accent)}',
+    '.amb-jog-read{flex:1;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#8a93a3}',
+    '.amb-jog-read .k{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#59616f}',
+    '.amb-jog-read b{color:#dbe3ef;font-weight:600}',
+    '.amb-turn.amb-jogged{outline:1px solid var(--amb-accent);outline-offset:2px}',
     '@media (max-width:520px){.amb-panel{width:92vw}}',
     '.amb-choice{display:block;width:100%;text-align:left;margin:4px 0 0;padding:7px 10px;border-radius:9px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:#dbe3ef;font:inherit;font-size:13px;cursor:pointer}',
     '.amb-read{display:flex;gap:7px;align-items:baseline;margin-top:8px;border-top:1px solid rgba(255,255,255,.08);padding-top:6px;font:10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace}',
@@ -165,6 +184,8 @@ var CLIENT = String.raw`(function () {
       '<div class="amb-thread"></div>' +
       '<div class="amb-files"></div>' +
       '<input type="file" multiple style="display:none">' +
+      (wheels ? '<div class="amb-jogbar"><div class="amb-wheel" data-jog><div class="rotor"></div><div class="core" data-jog-core><span data-jog-detent>0</span><span class="sub">jog</span></div></div>' +
+        '<div class="amb-jog-read"><div class="k">detent</div><div data-jog-line>turn the wheel</div><div data-jog-note></div></div></div>' : '') +
       '<div class="amb-row">' +
         '<textarea class="amb-input" rows="1" placeholder="Type, say, or attach something"></textarea>' +
       '</div>' +
@@ -190,6 +211,7 @@ var CLIENT = String.raw`(function () {
   var fileInput = dock.querySelector('input[type=file]');
   var chips = dock.querySelector('.amb-files');
   var bar = dock.querySelector('.amb-bar');
+  if (wheels) mountJog();
   // The voice switch sits in the head, one tap from any answer.
   var voiceBtn = document.createElement('button');
   voiceBtn.className = 'amb-round';
@@ -314,7 +336,9 @@ var CLIENT = String.raw`(function () {
         pending.remove();
       } else {
         var text = (body && body.text) || (body && body.error && body.error.message) || ('No answer (' + res.status + ').');
+        // The words are kept beside the bubble: a framed document shows an ellipsis on
         if (!failed && body && body.decision && body.decision.id !== undefined && body.decision.id !== null) attachVerdict(pending, body.decision.id);
+        pending.setAttribute('data-said', String(text));
         // A document is framed, and a document is not read aloud: its source is
         // markup, not speech.
         var framed = !failed && fillTurn(pending, text);
@@ -340,6 +364,122 @@ var CLIENT = String.raw`(function () {
     busy = false;
     bar.classList.remove('on');
     threadBox.scrollTop = threadBox.scrollHeight;
+  }
+
+
+  // The jog, as the dial has it: twelve detents, a pulse at each one, a core that can
+  // be held to change what a press does. Here it walks her answers — turn to pick one,
+  // press to read it aloud, hold to make the press put it back in the box instead.
+  function mountJog() {
+    var wheel = dock.querySelector('[data-jog]');
+    if (!wheel) return;
+    var rotor = wheel.querySelector('.rotor');
+    var core = wheel.querySelector('[data-jog-core]');
+    var detentEl = wheel.querySelector('[data-jog-detent]');
+    var line = dock.querySelector('[data-jog-line]');
+    var note = dock.querySelector('[data-jog-note]');
+    var ticks = [];
+    for (var i = 0; i < 12; i += 1) {
+      var tick = document.createElement('div');
+      tick.className = 'tick';
+      tick.style.transform = 'rotate(' + i * 30 + 'deg)';
+      rotor.appendChild(tick);
+      ticks.push(tick);
+    }
+    var detent = 0;
+    var pulses = 0;
+    var actions = ['read', 'say'];
+    var action = 0;
+    function turns() { return Array.prototype.slice.call(threadBox.querySelectorAll('.amb-turn.bot')); }
+    function paint() {
+      detentEl.textContent = String(detent);
+      ticks.forEach(function (tick, index) { tick.classList.toggle('on', index === detent); });
+      var all = turns();
+      line.innerHTML = '';
+      if (!all.length) {
+        line.textContent = 'no answers yet';
+      } else {
+        var pick = all[detent % all.length];
+        var said = (pick.getAttribute('data-said') || pick.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 46);
+        var strong = document.createElement('b');
+        strong.textContent = (detent % all.length) + 1 + '/' + all.length;
+        line.appendChild(strong);
+        line.appendChild(document.createTextNode(' ' + (said || '—')));
+        all.forEach(function (turn) { turn.classList.remove('amb-jogged'); });
+        pick.classList.add('amb-jogged');
+        pick.scrollIntoView({ block: 'nearest' });
+      }
+      note.textContent = actions[action] + ' · ' + pulses + (pulses === 1 ? ' pulse' : ' pulses');
+    }
+    function step(delta) {
+      detent = (detent + delta + 12) % 12;
+      pulses += Math.abs(delta);
+      try { if (navigator.vibrate) navigator.vibrate(8); } catch (err) {}
+      paint();
+    }
+    function selected() {
+      var all = turns();
+      return all.length ? all[detent % all.length] : null;
+    }
+    var drag = null;
+    function angleAt(ev) {
+      var box = wheel.getBoundingClientRect();
+      var dx = ev.clientX - (box.left + box.width / 2);
+      var dy = ev.clientY - (box.top + box.height / 2);
+      return Math.atan2(dy, dx) * 180 / Math.PI;
+    }
+    rotor.addEventListener('pointerdown', function (ev) {
+      drag = angleAt(ev);
+      try { rotor.setPointerCapture(ev.pointerId); } catch (err) {}
+    });
+    rotor.addEventListener('pointermove', function (ev) {
+      if (drag === null) return;
+      var now = angleAt(ev);
+      var moved = now - drag;
+      if (moved > 180) moved -= 360;
+      if (moved < -180) moved += 360;
+      if (Math.abs(moved) >= 28) {
+        step(moved > 0 ? 1 : -1);
+        drag = now;
+      }
+    });
+    function endDrag() { drag = null; }
+    rotor.addEventListener('pointerup', endDrag);
+    rotor.addEventListener('pointercancel', endDrag);
+    var hold = null;
+    core.addEventListener('pointerdown', function () {
+      hold = setTimeout(function () {
+        action = (action + 1) % actions.length;
+        wheel.classList.add('held');
+        try { if (navigator.vibrate) navigator.vibrate([10, 30, 10]); } catch (err) {}
+        note.textContent = actions[action] + ' · held';
+        setTimeout(function () { wheel.classList.remove('held'); }, 420);
+        hold = null;
+      }, 520);
+    });
+    function release() {
+      if (hold) { clearTimeout(hold); hold = null; }
+    }
+    core.addEventListener('pointerup', function () {
+      var wasHold = hold === null;
+      release();
+      if (wasHold) return;
+      var pick = selected();
+      if (!pick) return;
+      var said = String(pick.getAttribute('data-said') || pick.textContent || '').trim();
+      if (actions[action] === 'say') {
+        input.value = said;
+        input.focus();
+      } else {
+        speak(said.slice(0, 1200));
+      }
+      try { if (navigator.vibrate) navigator.vibrate(12); } catch (err) {}
+    });
+    core.addEventListener('pointerleave', release);
+    paint();
+    // A new answer changes what the wheel is walking, so the reading is repainted.
+    var observer = new MutationObserver(function () { paint(); });
+    observer.observe(threadBox, { childList: true });
   }
 
   // Her clarify card: the options are what the answer could be, so they are offered
@@ -708,7 +848,7 @@ var DEMO = `<!DOCTYPE html>
      that wants to place them itself.</p>
   <div id="ambient-cards"></div>
 </main>
-<script src="/embed.js" data-accent="#4a9eff" data-title="Ambient" data-render="true" data-skin="trnv"><\/script>
+<script src="/embed.js" data-accent="#4a9eff" data-title="Ambient" data-render="true" data-skin="trnv" data-wheels="true"><\/script>
 </body>
 </html>`;
 var json = /* @__PURE__ */ __name((body, status = 200) => new Response(JSON.stringify(body), {
