@@ -1635,7 +1635,7 @@ async function handleAmbient(request, env) {
   // ask: `/decide` returns the move and the notes, never a sentence. So the pen is
   // asked to write out the decision she made — CODS is a writer, not a second
   // opinion, handed her move and her recommendation and asked to say only that.
-  const written = await writeOut(env, ask, { intervention, move: decision.move, context });
+  const written = await writeOut(env, ask, { intervention, move: decision.move, context, files });
   // What came back is the stored pair when the pen returned it as it stands. The
   // first few hundred characters decide that honestly enough, and a rewritten
   // answer carries no store mark rather than a claim it did not earn.
@@ -1710,14 +1710,19 @@ async function handleAmbient(request, env) {
  * answer is nothing at all, said honestly, rather than words from somewhere the
  * decision never reached.
  */
-async function writeOut(env, ask, { intervention = null, move = null, context = "" } = {}) {
-  const binding = env && env.CODS && typeof env.CODS.fetch === "function" ? env.CODS : null;
-  if (!binding) return { ok: false, reason: "writer_unbound" };
+async function writeOut(env, ask, { intervention = null, move = null, context = "", files = [] } = {}) {
   const direction = [
     move ? `move: ${move}` : "",
     intervention && intervention.recommend ? `recommend: ${intervention.recommend}` : "",
     context ? `the page he is on: ${context}` : ""
   ].filter(Boolean).join("\n");
+  // CODS writes from words and cannot see a picture, so a turn carrying an image
+  // is written over the proxy instead. The ceiling is the same one, checked before
+  // every model is called: a model over nine cents does not run, it is named.
+  const pictures = files.filter((file) => file.image && file.dataUrl).map((file) => file.dataUrl);
+  if (pictures.length) return writePictures(env, ask, { direction, pictures });
+  const binding = env && env.CODS && typeof env.CODS.fetch === "function" ? env.CODS : null;
+  if (!binding) return { ok: false, reason: "writer_unbound" };
   try {
     const response = await binding.fetch(
       new Request("https://cods/chat", {
@@ -1739,6 +1744,68 @@ async function writeOut(env, ask, { intervention = null, move = null, context = 
     return { ok: false, reason: "writer_failed" };
   }
 }
+/**
+ * The pen, when there is a picture to look at.
+ *
+ * The cheap text model is tried first and the vision model only when it refuses,
+ * so the fallback is exercised by a real refusal rather than assumed to work. No
+ * model is called before its price is read against the ceiling.
+ */
+async function writePictures(env, ask, { direction = "", pictures = [] } = {}) {
+  const binding = env && env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
+  if (!binding) return { ok: false, reason: "writer_no_proxy" };
+  const cheapModel = env.MODEL || "upstage/solar-mini-4-5";
+  const visionModel = env.VISION_MODEL || "google/gemma-3-4b-it";
+  const messages = [
+    {
+      role: "system",
+      content: "You write out a decision that has already been made. Say only what it says, in as few words as the page needs." + (direction ? "\n\n" + direction : "")
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: String(ask).slice(0, 4e3) }, ...pictures.map((url) => ({ type: "image_url", image_url: { url } }))]
+    }
+  ];
+  const attempts = [cheapModel, visionModel].filter((model, index, all) => all.indexOf(model) === index);
+  let failure = { ok: false, reason: "writer_silent" };
+  for (const model of attempts) {
+    const price = modelPrice(model);
+    if (!price.ok) {
+      failure = { ok: false, reason: "writer_over_price", detail: price.reason };
+      continue;
+    }
+    let response;
+    try {
+      response = await binding.fetch(new Request("https://ai-proxy/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, messages, max_tokens: 1200 })
+      }));
+    } catch (err) {
+      failure = { ok: false, reason: "writer_failed", detail: String((err && err.message) || err).slice(0, 200) };
+      continue;
+    }
+    const raw = await response.text().catch(() => "");
+    let body = null;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      body = null;
+    }
+    if (!response.ok) {
+      failure = { ok: false, reason: "writer_" + response.status, detail: raw.slice(0, 200) };
+      continue;
+    }
+    const said = String((body && (body.text || body.answer || body.response)) || "").trim();
+    if (!said) {
+      failure = { ok: false, reason: "writer_silent" };
+      continue;
+    }
+    return { ok: true, text: said, model };
+  }
+  return failure;
+}
+__name(writePictures, "writePictures");
 __name(writeOut, "writeOut");
 __name(handleAmbient, "handleAmbient");
 /**
@@ -2184,7 +2251,12 @@ async function decideFirst(env, ask, { thread = [], prefs = [], files = [], look
         })
       })
     );
-    if (!response.ok) return { ok: false, reason: "ara_" + response.status };
+    if (!response.ok) {
+      // Her refusal is worth keeping: without it a 502 says only that something
+      // went wrong somewhere between here and her.
+      const why = await response.text().catch(() => "");
+      return { ok: false, reason: "ara_" + response.status + (why ? ": " + why.slice(0, 300) : "") };
+    }
     const data = await response.json().catch(() => null);
     if (!data) return { ok: false, reason: "ara_unreadable" };
     return {
