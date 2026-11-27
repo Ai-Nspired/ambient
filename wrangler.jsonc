@@ -11,7 +11,14 @@
     { "binding": "TRNV", "service": "trnv" },
     // The neighbours that remain.
     { "binding": "CODS", "service": "cods" },
-    { "binding": "TEW", "service": "tew" }
+    { "binding": "TEW", "service": "tew" },
+    // The vision model lives behind ai-proxy, whose key is already bound there.
+    // Reached over a binding for the same 1042 reason as above.
+    { "binding": "AI_PROXY", "service": "ai-proxy" },
+    // Bound in the dashboard on 2026-11-26; mirrored here so a build from this
+    // repository cannot drop it.
+    { "binding": "AI-PROXY", "service": "ai-proxy" },
+    { "binding": "CFMAIL", "service": "ai-n-email" }
   ],
   "kv_namespaces": [
     // His preferences and intentions: read before every answer, written when he
@@ -23,9 +30,10 @@
     // from it, so no URL is assembled by guesswork.
     "CF_ACCOUNT": "771ee2cc20f09248129114b7535b2cc9",
     // The model the pen writes with until he picks one in the dock. ARA still
-    // decides; this is only the voice that repeats what she decided, and it is a
-    // paid model because a free one's terms let the provider keep the prompt.
-    "MODEL": "mistralai/mistral-nemo",
+    // decides; this is only the voice that repeats what she decided. Chosen by
+    // price: nothing above nine cents a million tokens runs.
+    "MODEL": "upstage/solar-mini-4-5",
+    "VISION_MODEL": "google/gemma-3-4b-it",
     // Which pages may read or write his memory besides this Worker's own origin.
     // The card surface is the one that does: both names it answers to, because a
     // browser sends whichever one the operator is on. Anything else is named here

@@ -874,6 +874,30 @@ function extractPrefs(text) {
   return { text: kept.join("\n").trim(), learned };
 }
 __name(extractPrefs, "extractPrefs");
+// The price a model may carry, in and out, per million tokens. This gates the model
+// that makes the call, not how many calls are made: a model priced above it is refused
+// by name before it is ever reached.
+const MAX_MODEL_USD_PER_M = 0.09;
+// USD per million tokens, checked against the catalogue. A model that is not listed here
+// is treated as unpriced and refused, so a new model cannot slip in without a price.
+const TOKEN_PRICES = {
+  "upstage/solar-mini-4-5": { in: 0.01, out: 0.04 },
+  "google/gemma-3-4b-it": { in: 0.04, out: 0.05 },
+  "~z-ai/glm-flash-latest": { in: 0.036, out: 0.081 },
+  "z-ai/glm-5.3-flash": { in: 0.036, out: 0.081 },
+  "nex-agi/nex-n2.5-mini": { in: 0.025, out: 0.1 }
+};
+function modelPrice(model) {
+  const price = TOKEN_PRICES[model] || null;
+  if (!price) return { ok: false, reason: `${model} has no price on record`, in: null, out: null };
+  const over = price.in > MAX_MODEL_USD_PER_M || price.out > MAX_MODEL_USD_PER_M;
+  return {
+    ok: !over,
+    reason: over ? `${model} is $${price.in}/$${price.out} per million tokens, over the $${MAX_MODEL_USD_PER_M} ceiling` : "",
+    in: price.in,
+    out: price.out
+  };
+}
 function prefsBlock(prefs) {
   // Only standing memory is quoted to a model. A candidate is one a model wrote,
   // and handing it back to a model would let the model that wrote it promote it
@@ -2139,7 +2163,10 @@ async function decideFirst(env, ask, { thread = [], prefs = [], files = [], look
     cards: files.filter((file) => file.name).map((file, index) => ({
       id: `file:${index}`,
       label: `Attached ${file.image ? "image" : "document"}: ${file.name}`
-    }))
+    })),
+    // The picture itself: the data URL encoded once above for the prose call.
+    // The decider reads the same string, so an image is never fetched or encoded twice.
+    images: files.filter((file) => file.image && file.dataUrl).slice(0, 4).map((file) => file.dataUrl)
   };
   try {
     const response = await binding.fetch(
