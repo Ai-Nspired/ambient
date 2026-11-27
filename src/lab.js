@@ -85,6 +85,11 @@ const LAB = String.raw`<!DOCTYPE html>
           <div style="flex:0 0 110px"><label for="repeat">repeat ×</label><input id="repeat" type="number" min="1" max="200" value="1"></div>
           <div style="flex:2"><div class="note" id="stateInfo" style="margin-top:22px"></div></div>
         </div>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <input id="files" type="file" multiple style="flex:1">
+          <button class="ghost tiny" id="clearState" type="button" style="flex:0 0 auto">empty</button>
+        </div>
+        <div class="note" id="filesNote" style="margin-top:6px">load files into the state — read as text, each under a header, up to 1.5M chars</div>
       </div>
       <div class="field">
         <label for="attachKind">attachment</label>
@@ -109,6 +114,12 @@ const LAB = String.raw`<!DOCTYPE html>
         <label style="margin:0">questions — all answered against the same state</label>
         <button class="ghost tiny" id="addQ" type="button">+ question</button>
       </div>
+      <div class="actions" style="margin-bottom:10px">
+        <select id="setsSel" style="flex:1;min-width:150px"><option value="">saved sets…</option></select>
+        <input id="setName" type="text" placeholder="name this set" style="flex:1;min-width:130px">
+        <button class="ghost tiny" id="saveSet" type="button">save</button>
+        <button class="ghost tiny" id="delSet" type="button">delete</button>
+      </div>
       <div id="questions"></div>
       <div class="actions">
         <button id="send" type="button">send test</button>
@@ -120,6 +131,8 @@ const LAB = String.raw`<!DOCTYPE html>
         <button class="ghost" id="presetFlash" type="button">perplexity flash</button>
         <button class="ghost" id="presetDoc" type="button">scaledown document</button>
         <button class="ghost" id="presetGemini" type="button">gemini document</button>
+        <button class="ghost" id="presetForm" type="button">form image</button>
+        <button class="ghost" id="presetCode" type="button">codebase</button>
       </div>
     </section>
   </div>
@@ -136,6 +149,18 @@ const LAB = String.raw`<!DOCTYPE html>
     <table>
       <thead><tr><th>#</th><th>model</th><th>state</th><th>questions</th><th>tokens</th><th>cost</th><th>ms</th></tr></thead>
       <tbody id="runs"><tr><td colspan="7" class="note">nothing sent yet</td></tr></tbody>
+    </table>
+  </section>
+
+  <div class="status">context ladder — one question set, rising state</div>
+  <section>
+    <div class="actions" style="margin-bottom:10px">
+      <button class="ghost" id="runLadder" type="button">run ladder on scaledown</button>
+      <span class="note" id="ladderNote">10k → 1.5M chars, eleven rungs, text only, stops after two failures</span>
+    </div>
+    <table id="ladderTable" style="display:none">
+      <thead><tr><th>chars</th><th>tokens</th><th>cost</th><th>ms</th><th>answers</th></tr></thead>
+      <tbody id="ladder"></tbody>
     </table>
   </section>
 
@@ -692,6 +717,284 @@ const LAB = String.raw`<!DOCTYPE html>
     } finally {
       $('send').disabled = false;
     }
+  });
+
+  // ---- state from files ----------------------------------------------------
+  // A codebase snapshot is just text under headers; what matters is that the
+  // headers survive so an answer can name the file it came from.
+  $('files').addEventListener('change', function (ev) {
+    var files = Array.prototype.slice.call(ev.target.files || []);
+    if (!files.length) return;
+    var CAP = 1500000;
+    var out = [];
+    var left = CAP;
+    var cut = 0;
+    var i = 0;
+    function finish() {
+      $('state').value = out.join('\n');
+      info();
+      $('filesNote').textContent = files.length + ' file(s) read · ' + $('state').value.length + ' chars'
+        + (cut ? ' · ' + cut + ' cut at the 1.5M cap' : '');
+    }
+    function next() {
+      if (i >= files.length || left <= 0) { finish(); return; }
+      var file = files[i];
+      i += 1;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var piece = '--- ' + file.name + ' ---\n' + String(reader.result || '') + '\n';
+        if (piece.length > left) { piece = piece.slice(0, left); cut += 1; }
+        left -= piece.length;
+        out.push(piece);
+        next();
+      };
+      reader.onerror = function () { next(); };
+      reader.readAsText(file);
+    }
+    next();
+  });
+
+  $('clearState').addEventListener('click', function () {
+    $('state').value = '';
+    $('files').value = '';
+    $('filesNote').textContent = 'state emptied';
+    info();
+  });
+
+  // ---- saved question sets -------------------------------------------------
+  // The questions are the work; a set is the thing worth keeping.
+  var SETS = 'decisions.questionsets.v1';
+  function readSets() {
+    try {
+      var raw = localStorage.getItem(SETS);
+      var list = raw ? JSON.parse(raw) : null;
+      return Array.isArray(list) ? list : null;
+    } catch (error) { return null; }
+  }
+  var FORM_QS = [
+    { key: 'case_number', type: 'noul', instructions: 'Does the form have a field labelled CASE NUMBER?' },
+    { key: 'form_kind', type: 'choice', instructions: 'What kind of form is this?', criteria: 'name_change: A petition to change a person\'s name.\nsmall_claims: A claim for a small money amount.\ndivorce: A marital dissolution.\nrestraining: A protective order request.\nother: None of these.' },
+    { key: 'checkboxes', type: 'noul', instructions: 'Are there yes/no checkbox pairs?' },
+    { key: 'signature', type: 'noul', instructions: 'Is there a signature line near the bottom?' }
+  ];
+  var CODE_QS = [
+    { key: 'route_owner', type: 'choice', instructions: 'Which file defines the /lab route?', criteria: 'src/worker.js: the Worker entry.\nsrc/lab.js: the bench page.\nsrc/dial.js: the dial page.' },
+    { key: 'key_exposed', type: 'noul', instructions: 'Does any browser-side code hold the OpenRouter key?' },
+    { key: 'risk', type: 'score', instructions: 'How risky is this state for the live dock?', criteria: 'No dock code touched\nDock code present but unchanged\nDock behaviour changed\nDock broken' }
+  ];
+  var sets = readSets();
+  if (!sets) {
+    sets = [
+      { name: 'form -> schema', questions: FORM_QS },
+      { name: 'codebase transition', questions: CODE_QS }
+    ];
+    try { localStorage.setItem(SETS, JSON.stringify(sets)); } catch (error) {}
+  }
+
+  function renderSets() {
+    var sel = $('setsSel');
+    var keep = sel.value;
+    sel.textContent = '';
+    var blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = 'saved sets…';
+    sel.appendChild(blank);
+    sets.forEach(function (set, i) {
+      var o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = set.name + ' · ' + set.questions.length + 'q';
+      sel.appendChild(o);
+    });
+    if (keep) sel.value = keep;
+  }
+
+  function writeSets() {
+    try { localStorage.setItem(SETS, JSON.stringify(sets)); } catch (error) {}
+    renderSets();
+  }
+
+  $('saveSet').addEventListener('click', function () {
+    var name = ($('setName').value || '').trim();
+    if (!name) { $('hint').textContent = 'name the set first'; return; }
+    var current = questionCards().map(function (card) {
+      return {
+        key: card.querySelector('.qkey').value,
+        type: card.querySelector('.qtype').value,
+        instructions: card.querySelector('.qinst').value,
+        criteria: card.querySelector('.qcrit').value
+      };
+    });
+    var at = -1;
+    sets.forEach(function (set, i) { if (set.name === name) at = i; });
+    if (at >= 0) sets[at] = { name: name, questions: current };
+    else sets.unshift({ name: name, questions: current });
+    writeSets();
+    $('setName').value = '';
+    $('hint').textContent = 'set saved: ' + name;
+    setTimeout(function () { $('hint').textContent = ''; }, 1600);
+  });
+
+  $('setsSel').addEventListener('change', function () {
+    var set = sets[Number($('setsSel').value)];
+    if (!set) return;
+    setQuestions(set.questions);
+    $('setName').value = set.name;
+    $('status').textContent = 'loaded set: ' + set.name;
+  });
+
+  $('delSet').addEventListener('click', function () {
+    var at = Number($('setsSel').value);
+    if (!sets[at] && $('setsSel').value === '') { $('hint').textContent = 'pick a set to delete'; return; }
+    var name = sets[at].name;
+    sets.splice(at, 1);
+    writeSets();
+    $('hint').textContent = 'deleted: ' + name;
+    setTimeout(function () { $('hint').textContent = ''; }, 1600);
+  });
+
+  // ---- a form drawn here, so the image case needs no file -------------------
+  function formImage() {
+    var c = document.createElement('canvas');
+    c.width = 1000;
+    c.height = 1300;
+    var g = c.getContext('2d');
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, c.width, c.height);
+    g.strokeStyle = '#000';
+    g.fillStyle = '#000';
+    g.lineWidth = 2;
+    g.strokeRect(40, 40, 920, 1220);
+    g.font = '13px serif';
+    g.fillText('ATTORNEY OR PARTY WITHOUT ATTORNEY (Name, State Bar number, and address):', 60, 80);
+    for (var i = 0; i < 3; i += 1) {
+      g.beginPath(); g.moveTo(60, 105 + i * 22); g.lineTo(620, 105 + i * 22); g.stroke();
+    }
+    g.strokeRect(660, 62, 280, 92);
+    g.font = '12px serif';
+    g.fillText('FOR COURT USE ONLY', 680, 88);
+    g.font = 'bold 15px serif';
+    g.fillText('SUPERIOR COURT OF CALIFORNIA, COUNTY OF LOS ANGELES', 60, 200);
+    g.font = '13px serif';
+    g.fillText('PETITIONER:', 60, 250);
+    g.beginPath(); g.moveTo(155, 252); g.lineTo(520, 252); g.stroke();
+    g.fillText('CASE NUMBER:', 600, 250);
+    g.beginPath(); g.moveTo(720, 252); g.lineTo(940, 252); g.stroke();
+    g.font = 'bold 18px serif';
+    g.fillText('PETITION FOR CHANGE OF NAME', 250, 320);
+    g.font = '13px serif';
+    ['1. Petitioner requests a change of name.',
+     '2. Petitioner resides in this county.',
+     '3. Petitioner is not seeking to evade a debt or defraud a creditor.'].forEach(function (line, n) {
+      g.fillText(line, 60, 380 + n * 34);
+    });
+    g.fillText('4. Do you have a pending case in this court?', 60, 490);
+    g.strokeRect(90, 503, 13, 13);
+    g.fillText('Yes', 112, 515);
+    g.strokeRect(180, 503, 13, 13);
+    g.fillText('No', 202, 515);
+    for (var j = 0; j < 14; j += 1) {
+      g.beginPath(); g.moveTo(60, 560 + j * 33); g.lineTo(940, 560 + j * 33); g.stroke();
+    }
+    g.fillText('Date:', 60, 1130);
+    g.beginPath(); g.moveTo(100, 1132); g.lineTo(330, 1132); g.stroke();
+    g.fillText('SIGNATURE OF PETITIONER', 570, 1110);
+    g.beginPath(); g.moveTo(570, 1132); g.lineTo(940, 1132); g.stroke();
+    return c.toDataURL('image/png');
+  }
+
+  $('presetForm').addEventListener('click', function () {
+    useModel('perplexity/pplx-decider-flash-v1.2');
+    $('state').value = 'Read the attached form image and answer about its structure.';
+    $('repeat').value = '1';
+    setQuestions(FORM_QS);
+    setAttachment('image', formImage(), 'judicial-form.png');
+    rules();
+    $('status').textContent = 'form image loaded — the cheap model, four structural questions';
+  });
+
+  $('presetCode').addEventListener('click', function () {
+    useModel('perplexity/pplx-decider-flash-v1.2');
+    $('repeat').value = '1';
+    clearAttachment();
+    setQuestions(CODE_QS);
+    rules();
+    $('status').textContent = 'codebase loaded — put the files in the state, then snapshot and diff';
+  });
+
+  renderSets();
+
+  // ---- context ladder ------------------------------------------------------
+  // The million-token window is a claim until something is measured against it.
+  // The same questions run at rising sizes, so the rung where answers wobble or
+  // the call fails is the answer, not a guess.
+  var LADDER = [10000, 25000, 50000, 100000, 200000, 400000, 600000, 900000, 1200000, 1350000, 1500000];
+
+  function ladderText(target) {
+    var base = ($('state').value || '').trim();
+    if (!base) base = 'No content.';
+    var out = '';
+    while (out.length < target) out += base + '\n';
+    return out.slice(0, target);
+  }
+
+  function renderLadder(rows) {
+    var body = $('ladder');
+    body.textContent = '';
+    rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      [row.chars, row.tokens || '—', row.cost === undefined || row.cost === null ? '—' : '$' + row.cost, row.ms || '—', row.status + ' · ' + row.answers]
+        .forEach(function (value, i) {
+          var td = document.createElement('td');
+          td.textContent = String(value);
+          if (i === 0) td.className = 'n';
+          tr.appendChild(td);
+        });
+      body.appendChild(tr);
+    });
+    $('ladderTable').style.display = rows.length ? '' : 'none';
+  }
+
+  $('runLadder').addEventListener('click', async function () {
+    var model = 'scaledown/classify-1';
+    var questions = questionsPayload();
+    var results = [];
+    var fails = 0;
+    $('runLadder').disabled = true;
+    $('ladderNote').textContent = 'starting…';
+    for (var i = 0; i < LADDER.length; i += 1) {
+      if (fails >= 2) break;
+      var text = ladderText(LADDER[i]);
+      $('ladderNote').textContent = 'rung ' + (i + 1) + '/' + LADDER.length + ' · ' + text.length + ' chars…';
+      var started = Date.now();
+      var row = { chars: text.length };
+      try {
+        var res = await fetch('/api/decisions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: model, state: text, questions: questions })
+        });
+        var data = await res.json().catch(function () { return null; });
+        row.ms = Date.now() - started;
+        row.status = res.status;
+        var usage = (data && data.usage) || {};
+        row.tokens = usage.input_tokens;
+        row.cost = usage.cost;
+        var said = answerLine(data);
+        row.answers = said || (data && data.error ? String(data.error.code || data.error.message) : '');
+        fails = res.ok ? 0 : fails + 1;
+      } catch (error) {
+        row.ms = Date.now() - started;
+        row.status = 'net';
+        row.answers = error && error.message ? error.message : String(error);
+        fails += 1;
+      }
+      results.push(row);
+      renderLadder(results);
+    }
+    var last = results[results.length - 1] || {};
+    $('ladderNote').textContent = 'stopped at ' + (last.chars || 0) + ' chars'
+      + (fails >= 2 ? ' · two failures in a row' : ' · every rung answered');
+    $('runLadder').disabled = false;
   });
 
   addQuestion({ key: 'marker', type: 'noul', instructions: 'Is the exact marker ORANGE-731 present in the state?' });

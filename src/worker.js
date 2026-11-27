@@ -1736,10 +1736,10 @@ async function handleDecisions(request, env) {
   }
   let state = body?.state;
   if (typeof state === "string") {
-    state = state.slice(0, 2e5);
+    state = state.slice(0, 15e5);
   } else if (Array.isArray(state)) {
     state = state.slice(0, 8).map((part) => {
-      if (typeof part === "string") return part.slice(0, 2e5);
+      if (typeof part === "string") return part.slice(0, 15e5);
       const url = part && part.type === "image_url" && part.image_url && typeof part.image_url.url === "string" ? part.image_url.url : "";
       if (/^data:image\/(png|jpeg|webp);base64,/.test(url)) return { type: "image_url", image_url: { url: url.slice(0, 6 * 1024 * 1024) } };
       // A document is the same shape Chat Completions uses, and only a data URL is
