@@ -899,6 +899,14 @@ function modelPrice(model) {
     out: price.out
   };
 }
+// One neighbour, two possible names: `AI-PROXY` is what the account binds, and a
+// deploy that named it `AI_PROXY` should not silently leave the pen unbindable.
+function proxyOf(env) {
+  if (!env) return null;
+  const bound = env.AI_PROXY || env["AI-PROXY"] || null;
+  return bound && typeof bound.fetch === "function" ? bound : null;
+}
+__name(proxyOf, "proxyOf");
 function prefsBlock(prefs) {
   // Only standing memory is quoted to a model. A candidate is one a model wrote,
   // and handing it back to a model would let the model that wrote it promote it
@@ -1592,7 +1600,7 @@ async function handleDecisions(request, env) {
   if (!state || (Array.isArray(state) && !state.length)) {
     return json({ error: { code: "state_empty", message: "The state is empty; there is nothing to decide about." } }, 400);
   }
-  const proxy = env && env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
+  const proxy = proxyOf(env);
   if (!proxy) {
     return json({ error: { code: "proxy_unbound", message: "The proxy that holds the key is not bound." } }, 503);
   }
@@ -1827,7 +1835,7 @@ async function writeOut(env, ask, { intervention = null, move = null, context = 
  * model is called before its price is read against the ceiling.
  */
 async function writePictures(env, ask, { direction = "", pictures = [] } = {}) {
-  const binding = env && env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
+  const binding = proxyOf(env);
   if (!binding) return { ok: false, reason: "writer_no_proxy" };
   const cheapModel = env.MODEL || "upstage/solar-mini-4-5";
   const visionModel = env.VISION_MODEL || "google/gemma-3-4b-it";

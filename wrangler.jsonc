@@ -2,24 +2,74 @@
   "name": "ambient",
   "main": "src/worker.js",
   "compatibility_date": "2026-11-01",
-  "services": [
-    // The dock is ARA's extension, so her pass runs here before anything is
-    // generated — over a binding, because a workers.dev Worker may not fetch
-    // another workers.dev hostname (Cloudflare 1042).
-    { "binding": "ARA", "service": "ara" },
-    // TRNV, bound so this Worker can reach it over a service binding.
-    { "binding": "TRNV", "service": "trnv" },
-    // The neighbours that remain.
-    { "binding": "CODS", "service": "cods" },
-    { "binding": "TEW", "service": "tew" },
-    // The vision model lives behind ai-proxy, whose key is already bound there.
-    // Reached over a binding for the same 1042 reason as above.
-    { "binding": "AI_PROXY", "service": "ai-proxy" },
-    // Bound in the dashboard on 2026-11-26; mirrored here so a build from this
-    // repository cannot drop it.
-    { "binding": "AI-PROXY", "service": "ai-proxy" },
-    { "binding": "CFMAIL", "service": "ai-n-email" }
-  ],
+  // Every neighbour is bound here in the shape the deployed Worker actually holds:
+  // `unsafe` service bindings with their environment named, because that is what the
+  // account has and a `services` entry is checked differently at deploy time. A
+  // workers.dev Worker may not fetch another workers.dev hostname (Cloudflare 1042),
+  // so each of these is reached over its binding and never over the open internet.
+  "unsafe": {
+    "bindings": [
+      // The account's own agent browser. Nothing here calls it yet: it answers as a
+      // devtools endpoint (/json/version, /v1/devtools/browser), not as a page route.
+      {
+        "name": "ABROWSER",
+        "type": "service",
+        "service": "agent-browsing",
+        "environment": "production",
+        "entrypoint": "default"
+      },
+      // The proxy that holds the upstream model key: the pen writes a picture turn
+      // through it, and /api/decisions spends a Decisions call through it. One
+      // binding, under the dashed name; the code reads either spelling so a rename
+      // on one side cannot quietly unbind the answers.
+      {
+        "name": "AI-PROXY",
+        "type": "service",
+        "service": "ai-proxy",
+        "environment": "production"
+      },
+      // The dock is ARA's extension, so her pass runs before anything is generated.
+      {
+        "name": "ARA",
+        "type": "service",
+        "service": "ara",
+        "environment": "production"
+      },
+      // Mail, bound so a build from this repository cannot drop it.
+      {
+        "name": "CFMAIL",
+        "type": "service",
+        "service": "ai-n-email",
+        "environment": "production"
+      },
+      // The card store: the pen writes through it and the dock reads a stored pair.
+      {
+        "name": "CODS",
+        "type": "service",
+        "service": "cods",
+        "environment": "production"
+      },
+      {
+        "name": "TEW",
+        "type": "service",
+        "service": "tew",
+        "environment": "production"
+      },
+      {
+        "name": "TRNV",
+        "type": "service",
+        "service": "trnv",
+        "environment": "production"
+      },
+      {
+        "name": "TRUTH",
+        "type": "service",
+        "service": "truth",
+        "environment": "production",
+        "entrypoint": "default"
+      }
+    ]
+  },
   "kv_namespaces": [
     // His preferences and intentions: read before every answer, written when he
     // states a new one. This is Memoria, the same store the account curates.
@@ -40,32 +90,6 @@
     // deliberately, never wildcarded.
     "PREFS_ORIGINS": "https://cods.nspired.cc,https://cods.ai-n.workers.dev",
     "ACCENT": "#4a9eff"
-  },
-  // The store the cards page reads before it asks her. Bound the way the cards
-  // Worker binds it, because that shape is known to work here — a services entry
-  // is checked against the account at deploy time and a binding to a Worker that
-  // is not there fails the whole deploy. Read-only on this side: nothing is
-  // written through it.
-  "unsafe": {
-    "bindings": [
-      // The account's own agent browser, bound by the name his config gives it.
-      // Nothing here calls it yet: it answers as a devtools endpoint
-      // (/json/version, /v1/devtools/browser), not as a page-to-text route.
-      {
-        "name": "ABROWSER",
-        "type": "service",
-        "service": "agent-browsing",
-        "environment": "production",
-        "entrypoint": "default"
-      },
-      {
-        "name": "TRUTH",
-        "type": "service",
-        "service": "truth",
-        "environment": "production",
-        "entrypoint": "default"
-      }
-    ]
   },
   // Dynamic Workers: code loaded at runtime into its own sandbox, for work that
   // should not run inside this Worker's own isolate.
