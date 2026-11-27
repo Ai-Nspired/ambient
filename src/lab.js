@@ -1,10 +1,13 @@
 // The Decisions workbench.
 //
-// The reference test is two lines of curl: a model, a piece of state, and a typed
-// question. This page is that curl with the parts exposed, so the state can grow and
-// the image can be swapped without editing a shell command. The key never reaches the
-// browser: the page posts to /api/decisions, and the Worker asks the proxy that
-// already holds the OpenRouter key.
+// The point is not one question. A decision model reads a long state once and
+// answers many typed questions against it in the same call, so the expensive part —
+// the context — is paid for once and the questions are nearly free. This page is
+// built around that: a state you can make long, a list of questions, and snapshots
+// you can diff to see what a changed question moved.
+//
+// The key never reaches the browser: the page posts to /api/decisions and the Worker
+// asks the proxy that already holds the OpenRouter key.
 const LAB = String.raw`<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -13,179 +16,615 @@ const LAB = String.raw`<!DOCTYPE html>
   :root { color-scheme: dark; --bg:#0b0d10; --panel:#12161b; --line:#222a33; --ink:#e8edf3; --dim:#8b98a8; --accent:#4a9eff; --good:#5fd39a; --bad:#ff7b72; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
-  main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 26px 20px 64px; }
   h1 { font: 600 16px/1.3 inherit; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); margin:0 0 4px; }
-  p.lede { color:var(--dim); margin:0 0 22px; max-width:70ch; }
-  p.lede a { color:var(--accent); }
-  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
-  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  p.lede { color:var(--dim); margin:0 0 16px; max-width:82ch; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:start; }
+  @media (max-width: 940px) { .grid { grid-template-columns: 1fr; } }
   section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
   label { display:block; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); margin:0 0 6px; }
-  input[type=text], textarea, select { width:100%; background:#0e1217; color:var(--ink); border:1px solid var(--line); border-radius:7px; padding:9px 10px; font:inherit; }
-  textarea { min-height:96px; resize:vertical; }
+  input[type=text], input[type=number], textarea, select { width:100%; background:#0e1217; color:var(--ink); border:1px solid var(--line); border-radius:7px; padding:9px 10px; font:inherit; }
+  textarea { min-height:88px; resize:vertical; }
   .row { display:flex; gap:10px; }
   .row > * { flex:1; }
   .field { margin-bottom:12px; }
-  .actions { display:flex; gap:10px; align-items:center; margin-top:6px; }
-  button { background:var(--accent); color:#06121f; border:0; border-radius:7px; padding:9px 16px; font:600 13px/1 inherit; letter-spacing:.06em; text-transform:uppercase; cursor:pointer; }
+  .actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:4px; }
+  button { background:var(--accent); color:#06121f; border:0; border-radius:7px; padding:9px 14px; font:600 12px/1 inherit; letter-spacing:.06em; text-transform:uppercase; cursor:pointer; }
   button.ghost { background:transparent; color:var(--dim); border:1px solid var(--line); }
+  button.tiny { padding:5px 9px; font-size:10px; }
   button:disabled { opacity:.5; cursor:default; }
   .note { color:var(--dim); font-size:12px; }
-  pre { margin:0; padding:12px; background:#0e1217; border:1px solid var(--line); border-radius:7px; overflow:auto; max-height:420px; white-space:pre-wrap; word-break:break-word; }
+  pre { margin:0; padding:12px; background:#0e1217; border:1px solid var(--line); border-radius:7px; overflow:auto; max-height:340px; white-space:pre-wrap; word-break:break-word; }
   .status { margin:14px 0 8px; color:var(--dim); font-size:12px; }
   .status b { color:var(--ink); font-weight:600; }
   .ok { color:var(--good); } .err { color:var(--bad); }
-  .img-row { display:flex; gap:10px; align-items:center; }
-  .img-row input[type=file] { color:var(--dim); font-size:12px; }
-  .thumb { width:52px; height:52px; object-fit:cover; border-radius:6px; border:1px solid var(--line); display:none; }
+  table { width:100%; border-collapse:collapse; font-size:11.5px; }
+  th { text-align:left; color:var(--dim); font-weight:500; letter-spacing:.08em; text-transform:uppercase; font-size:10px; padding:0 8px 6px 0; }
+  td { padding:5px 8px 5px 0; border-top:1px solid var(--line); color:#c6cfdb; vertical-align:top; }
+  td.n { color:var(--ink); }
+  #runs td:nth-child(2) { white-space:nowrap; font-size:11px; }
+  #runs td:nth-child(3), #runs td:nth-child(5), #runs td:nth-child(6), #runs td:nth-child(7) { white-space:nowrap; }
+  #runs td:nth-child(4) { min-width:190px; }
+  .attach { display:none; margin-top:8px; }
+  .attach.on { display:block; }
+  .q { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; background:#0f141a; }
+  .q .head { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .q .head input { flex:1; }
+  .q .head select { flex:0 0 170px; }
+  .q textarea { min-height:52px; }
+  .q .crit { display:none; margin-top:8px; }
+  .q .crit.on { display:block; }
+  .q .crit textarea { min-height:66px; }
+  .q .foot { display:flex; justify-content:flex-end; margin-top:6px; }
+  .lever { display:flex; gap:16px; flex-wrap:wrap; margin:10px 0 0; }
+  .lever div { font-size:12px; color:var(--dim); }
+  .lever b { color:var(--ink); font-weight:600; }
+  .snaps { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px; }
+  .snaps > div { flex:1; min-width:180px; }
+  .delta.up { color:var(--bad); } .delta.down { color:var(--good); } .delta.same { color:var(--dim); }
 </style></head>
 <body><main>
   <h1>decisions — hands on</h1>
-  <p class="lede">The reference test, with the parts editable: a model, a state, one typed question. Vary the text alone, then the image alone, and keep the question still — the answer is the measurement. Served through this Worker's proxy, so no key is in the page.</p>
+  <p class="lede">One state, many questions, one call. The context is what you pay for, so make it long and ask everything at once; then snapshot the answers and diff them to see which question actually moved.</p>
 
   <div class="grid">
     <section>
       <div class="field">
         <label for="model">model</label>
-        <input id="model" type="text" value="perplexity/pplx-decider-v1.2" spellcheck="false">
+        <select id="model"><option value="perplexity/pplx-decider-v1.2">perplexity/pplx-decider-v1.2</option></select>
+        <div class="note" id="modelNote" style="margin-top:6px">reading the catalogue…</div>
       </div>
       <div class="field">
-        <label for="state">state</label>
+        <label for="custom">or a model id of your own</label>
+        <input id="custom" type="text" placeholder="vendor/model" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="state">state (the long part)</label>
         <textarea id="state" spellcheck="false">Your growing test text. Marker: ORANGE-731.</textarea>
-        <div class="note" id="stateInfo" style="margin-top:6px"></div>
+        <div class="row" style="margin-top:8px">
+          <div style="flex:0 0 110px"><label for="repeat">repeat ×</label><input id="repeat" type="number" min="1" max="200" value="1"></div>
+          <div style="flex:2"><div class="note" id="stateInfo" style="margin-top:22px"></div></div>
+        </div>
       </div>
       <div class="field">
-        <label for="image">image part (goes into the state array)</label>
-        <div class="img-row">
-          <input id="image" type="file" accept="image/png,image/jpeg">
-          <img id="thumb" class="thumb" alt="">
-          <button class="ghost" id="clearImage" type="button">clear</button>
+        <label for="attachKind">attachment</label>
+        <select id="attachKind">
+          <option value="none">none</option>
+          <option value="image">image part (image_url)</option>
+          <option value="file">document part (file)</option>
+        </select>
+        <div class="attach" id="attachBox">
+          <div class="row" style="margin-top:8px;align-items:center">
+            <input id="attachFile" type="file" style="flex:1">
+            <button class="ghost" id="clearAttach" type="button" style="flex:0 0 auto">clear</button>
+          </div>
+          <div class="note" id="attachNote" style="margin-top:6px"></div>
         </div>
-        <div class="note" style="margin-top:6px">PNG or JPEG. As a part: {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,…"}}</div>
+        <div class="note" id="rules" style="margin-top:6px"></div>
       </div>
     </section>
 
     <section>
-      <div class="row field">
-        <div><label for="qkey">question key</label><input id="qkey" type="text" value="marker" spellcheck="false"></div>
-        <div><label for="qtype">type</label>
-          <select id="qtype">
-            <option value="noul">noul</option>
-            <option value="choice">choice</option>
-            <option value="score">score</option>
-            <option value="box">box</option>
-          </select>
-        </div>
+      <div class="field" style="display:flex;justify-content:space-between;align-items:center">
+        <label style="margin:0">questions — all answered against the same state</label>
+        <button class="ghost tiny" id="addQ" type="button">+ question</button>
       </div>
-      <div class="field">
-        <label for="instructions">instructions</label>
-        <textarea id="instructions" spellcheck="false">Is the exact marker ORANGE-731 present in the state?</textarea>
-      </div>
-      <div class="field" id="optionsField" style="display:none">
-        <label for="options">options (one per line, for choice)</label>
-        <textarea id="options" spellcheck="false"></textarea>
-      </div>
+      <div id="questions"></div>
       <div class="actions">
         <button id="send" type="button">send test</button>
         <button class="ghost" id="copy" type="button">copy request</button>
         <span class="note" id="hint"></span>
       </div>
+      <div class="actions" style="margin-top:10px">
+        <button class="ghost" id="presetPplx" type="button">perplexity text</button>
+        <button class="ghost" id="presetFlash" type="button">perplexity flash</button>
+        <button class="ghost" id="presetDoc" type="button">scaledown document</button>
+        <button class="ghost" id="presetGemini" type="button">gemini document</button>
+      </div>
     </section>
   </div>
 
   <div class="status" id="status">nothing sent yet</div>
-  <section>
+  <div class="lever" id="lever"></div>
+  <section style="margin-top:12px">
     <label>response</label>
     <pre id="out">—</pre>
   </section>
 
-  <div class="status" id="sentLabel" style="display:none">request</div>
-  <section id="sentWrap" style="display:none">
-    <label>request body</label>
+  <div class="status">runs</div>
+  <section>
+    <table>
+      <thead><tr><th>#</th><th>model</th><th>state</th><th>questions</th><th>tokens</th><th>cost</th><th>ms</th></tr></thead>
+      <tbody id="runs"><tr><td colspan="7" class="note">nothing sent yet</td></tr></tbody>
+    </table>
+  </section>
+
+  <div class="status">snapshots &amp; diff</div>
+  <section>
+    <div class="snaps">
+      <div><label for="snapA">baseline (a)</label><select id="snapA"></select></div>
+      <div><label for="snapB">compare (b)</label><select id="snapB"></select></div>
+      <div style="flex:0 0 auto"><button class="ghost tiny" id="dlSnaps" type="button">download json</button></div>
+      <div style="flex:0 0 auto"><button class="ghost tiny" id="clearSnaps" type="button">clear</button></div>
+    </div>
+    <div class="note" id="snapNote" style="margin-bottom:10px">no snapshots yet — every run stores one</div>
+    <table id="diffTable" style="display:none">
+      <thead><tr><th>question</th><th>a</th><th>b</th><th>Δ</th></tr></thead>
+      <tbody id="diff"></tbody>
+    </table>
+  </section>
+
+  <section id="sentWrap" style="display:none;margin-top:12px">
+    <label>request body (data URLs shortened)</label>
     <pre id="sent"></pre>
   </section>
 </main>
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var imageData = '';
-  var imageName = '';
+  var attachment = null; // { kind:'image'|'file', data:dataUrl, label:string }
+  var runs = 0;
+  var catalogue = {};
+  var STORE = 'decisions.snapshots.v1';
+  var snapshots = loadSnapshots();
 
-  function stateText() { return $('state').value; }
+  function useModel(id) {
+    var select = $('model');
+    var has = Array.prototype.some.call(select.options, function (o) { return o.value === id; });
+    select.value = has ? id : select.value;
+    $('custom').value = has ? '' : id;
+    rules();
+  }
+
+  function modelId() { return ($('custom').value || '').trim() || $('model').value; }
+
+  function stateText() {
+    var text = $('state').value;
+    var times = Math.max(1, Math.min(200, Number($('repeat').value) || 1));
+    if (times === 1) return text;
+    var parts = [];
+    for (var i = 0; i < times; i += 1) parts.push(text);
+    return parts.join('\n');
+  }
 
   function stateValue() {
     var text = stateText();
-    if (!imageData) return text;
-    return [text, { type: 'image_url', image_url: { url: imageData } }];
+    if (!attachment) return text;
+    var part = attachment.kind === 'image'
+      ? { type: 'image_url', image_url: { url: attachment.data } }
+      : { type: 'file', file: { file_data: attachment.data, filename: attachment.label } };
+    return [text, part];
   }
 
-  function questions() {
-    var key = ($('qkey').value || 'marker').trim() || 'marker';
-    var type = $('qtype').value;
-    var q = { type: type, instructions: $('instructions').value };
-    if (type === 'choice') {
-      var opts = $('options').value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
-      if (opts.length) q.options = opts;
-    }
+  // ---- questions -----------------------------------------------------------
+  function questionCards() {
+    return Array.prototype.slice.call(document.querySelectorAll('#questions .q'));
+  }
+
+  function addQuestion(q) {
+    var card = document.createElement('div');
+    card.className = 'q';
+    card.innerHTML = ''
+      + '<div class="head">'
+      + '  <input class="qkey" type="text" spellcheck="false" value="">'
+      + '  <select class="qtype"><option value="noul">noul (yes/no)</option><option value="choice">choice (criteria)</option><option value="score">score (levels)</option></select>'
+      + '</div>'
+      + '<textarea class="qinst" spellcheck="false" placeholder="instructions"></textarea>'
+      + '<div class="crit"><textarea class="qcrit" spellcheck="false" placeholder="key: description"></textarea>'
+      + '<div class="note critnote" style="margin-top:6px">choice: one per line, key: description. score: one level per line, easiest to hardest, 2–10 of them.</div></div>'
+      + '<div class="foot"><button class="ghost tiny qdel" type="button">remove</button></div>';
+    $('questions').appendChild(card);
+    card.querySelector('.qkey').value = (q && q.key) || 'question_' + (questionCards().length + 1);
+    card.querySelector('.qinst').value = (q && q.instructions) || '';
+    card.querySelector('.qtype').value = (q && q.type) || 'noul';
+    card.querySelector('.qcrit').value = (q && q.criteria) || '';
+    card.querySelector('.qtype').addEventListener('change', function () { syncCrit(card); });
+    card.querySelector('.qdel').addEventListener('click', function () {
+      if (questionCards().length === 1) { $('hint').textContent = 'keep at least one question'; return; }
+      card.remove();
+    });
+    syncCrit(card);
+    return card;
+  }
+
+  function syncCrit(card) {
+    var type = card.querySelector('.qtype').value;
+    card.querySelector('.crit').classList.toggle('on', type !== 'noul');
+    card.querySelector('.critnote').textContent = type === 'score'
+      ? 'score: one level per line, easiest to hardest, 2–10 of them.'
+      : 'choice: one per line, "key: description".';
+  }
+
+  function questionsPayload() {
     var out = {};
-    out[key] = q;
+    questionCards().forEach(function (card) {
+      var key = (card.querySelector('.qkey').value || '').trim() || 'question';
+      var type = card.querySelector('.qtype').value;
+      var q = { type: type, instructions: card.querySelector('.qinst').value };
+      var lines = (card.querySelector('.qcrit').value || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+      if (type === 'choice' && lines.length) {
+        q.criteria = {};
+        lines.forEach(function (line) {
+          var at = line.indexOf(':');
+          if (at > 0) q.criteria[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+          else q.criteria[line] = line;
+        });
+      }
+      if (type === 'score' && lines.length) q.criteria = lines;
+      out[key] = q;
+    });
     return out;
   }
 
-  function body() {
-    return { model: $('model').value.trim(), state: stateValue(), questions: questions() };
-  }
+  function questionList() { return questionCards().map(function (c) { return { key: c.querySelector('.qkey').value, type: c.querySelector('.qtype').value }; }); }
+
+  function body() { return { model: modelId(), state: stateValue(), questions: questionsPayload() }; }
 
   function preview() {
-    var b = body();
-    var shown = JSON.parse(JSON.stringify(b));
-    if (imageData) shown.state[1].image_url.url = imageData.slice(0, 64) + '… (' + Math.round(imageData.length / 1024) + ' kb)';
+    var shown = JSON.parse(JSON.stringify(body()));
+    if (Array.isArray(shown.state) && shown.state[1]) {
+      var part = shown.state[1];
+      var data = part.type === 'image_url' ? part.image_url.url : part.file.file_data;
+      var mark = data.slice(0, 40) + '… (' + Math.round(data.length / 1024) + ' kb)';
+      if (part.type === 'image_url') part.image_url.url = mark;
+      else part.file.file_data = mark;
+    }
     return JSON.stringify(shown, null, 2);
   }
 
   function info() {
-    var chars = stateText().length;
-    var words = stateText().trim() ? stateText().trim().split(/\s+/).length : 0;
-    $('stateInfo').textContent = chars + ' chars · ' + words + ' words' + (imageData ? ' · image ' + Math.round(imageData.length / 1024) + ' kb (' + imageName + ')' : ' · text only');
+    var text = stateText();
+    var words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    $('stateInfo').textContent = text.length + ' chars · ' + words + ' words · ≈' + Math.round(text.length / 4) + ' tokens';
+    $('attachNote').textContent = attachment
+      ? attachment.kind + ' · ' + attachment.label + ' · ' + Math.round(attachment.data.length / 1024) + ' kb — state becomes an array'
+      : 'no attachment: the state is text';
   }
 
-  $('qtype').addEventListener('change', function () {
-    $('optionsField').style.display = $('qtype').value === 'choice' ? '' : 'none';
-  });
-  $('state').addEventListener('input', info);
+  function rules() {
+    var id = modelId();
+    var entry = catalogue[id] || null;
+    var says = [];
+    if (entry) {
+      if (entry.ctx) says.push('ctx ' + Math.round(entry.ctx / 1000) + 'k');
+      if (entry.inp !== null && entry.inp !== undefined) says.push('$' + entry.inp + '/M in');
+      says.push(entry.file ? 'reads documents' : 'no document part');
+      says.push(entry.image ? 'reads images' : 'no image part');
+    } else {
+      says.push('not in the catalogue — capabilities unknown');
+    }
+    if (/scaledown/.test(id)) says.push('one document per request, data URL only (pdf/png/jpeg/tiff)');
+    if (/gemini-decision/.test(id)) says.push('pdf, csv, office, opendocument; a URL must name its type');
+    $('rules').textContent = says.join(' · ');
+  }
 
-  $('image').addEventListener('change', function (ev) {
+  $('attachKind').addEventListener('change', function () {
+    var kind = $('attachKind').value;
+    $('attachBox').classList.toggle('on', kind !== 'none');
+    $('attachFile').accept = kind === 'file' ? '.pdf,.csv,application/pdf,text/csv' : 'image/png,image/jpeg,image/tiff';
+    if (kind === 'none') { attachment = null; $('attachFile').value = ''; }
+    info();
+  });
+
+  $('attachFile').addEventListener('change', function (ev) {
     var file = ev.target.files && ev.target.files[0];
     if (!file) return;
     var reader = new FileReader();
     reader.onload = function () {
-      imageData = String(reader.result || '');
-      imageName = file.name + ' · ' + file.type;
-      $('thumb').src = imageData;
-      $('thumb').style.display = 'block';
+      attachment = { kind: $('attachKind').value === 'image' ? 'image' : 'file', data: String(reader.result || ''), label: file.name };
       info();
     };
     reader.readAsDataURL(file);
   });
 
-  $('clearImage').addEventListener('click', function () {
-    imageData = ''; imageName = ''; $('image').value = ''; $('thumb').style.display = 'none';
+  $('clearAttach').addEventListener('click', function () { attachment = null; $('attachFile').value = ''; info(); });
+  $('addQ').addEventListener('click', function () { addQuestion(); });
+  $('state').addEventListener('input', info);
+  $('repeat').addEventListener('input', info);
+  $('custom').addEventListener('input', rules);
+  $('model').addEventListener('change', rules);
+
+  // A one-page PDF with real text, so a document test needs no file on hand.
+  function simplePdf(lines) {
+    var BS = String.fromCharCode(92);
+    var esc = function (t) {
+      return String(t).split(BS).join(BS + BS).replace(/[()]/g, function (c) { return BS + c; });
+    };
+    var content = 'BT /F1 11 Tf 24 730 Td 15 TL\n'
+      + lines.map(function (l) { return '(' + esc(l) + ') Tj T*'; }).join('\n')
+      + '\nET';
+    var objects = [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+      '<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+    ];
+    var out = '%PDF-1.4\n';
+    var offsets = [];
+    objects.forEach(function (obj, i) {
+      offsets.push(out.length);
+      out += (i + 1) + ' 0 obj\n' + obj + '\nendobj\n';
+    });
+    var xref = out.length;
+    out += 'xref\n0 ' + (objects.length + 1) + '\n0000000000 65535 f \n';
+    offsets.forEach(function (o) { out += ('0000000000' + o).slice(-10) + ' 00000 n \n'; });
+    out += 'trailer\n<< /Size ' + (objects.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF';
+    return 'data:application/pdf;base64,' + btoa(out);
+  }
+
+  var INVOICE = [
+    'NORTH VALLEY WATER DISTRICT',
+    'Invoice 2026-4471',
+    'Issued: 2026-11-02   Due: 2026-12-02',
+    '',
+    'Customer: Pettigrew Well Drilling',
+    'Service: emergency pump repair, well 12-B',
+    'Amount due: 4,820.00 USD',
+    'Terms: net 30. Late fee 1.5% per month.',
+    '',
+    'Contact: billing@northvalley.example  (555) 010-4471'
+  ];
+
+  function setAttachment(kind, data, label) {
+    attachment = { kind: kind, data: data, label: label };
+    $('attachKind').value = kind;
+    $('attachBox').classList.add('on');
+    $('attachFile').accept = kind === 'file' ? '.pdf,.csv,application/pdf,text/csv' : 'image/png,image/jpeg,image/tiff';
     info();
+  }
+
+  function clearAttachment() {
+    attachment = null;
+    $('attachKind').value = 'none';
+    $('attachBox').classList.remove('on');
+    info();
+  }
+
+  function setQuestions(list) {
+    $('questions').textContent = '';
+    list.forEach(function (q) { addQuestion(q); });
+  }
+
+  $('presetPplx').addEventListener('click', function () {
+    useModel('perplexity/pplx-decider-v1.2');
+    $('state').value = 'Your growing test text. Marker: ORANGE-731.';
+    $('repeat').value = '1';
+    clearAttachment();
+    setQuestions([
+      { key: 'marker', type: 'noul', instructions: 'Is the exact marker ORANGE-731 present in the state?' },
+      { key: 'sentiment', type: 'score', instructions: 'How urgent does this text read?', criteria: 'None\nMild\nUrgent\nCritical' }
+    ]);
+    info();
+    $('status').textContent = 'perplexity text loaded — two questions, one call';
+  });
+
+  $('presetFlash').addEventListener('click', function () {
+    useModel('perplexity/pplx-decider-flash-v1.2');
+    $('state').value = 'Ticket: the upgrade failed with ERR_CARD_DECLINED and the invoice is overdue.';
+    $('repeat').value = '1';
+    clearAttachment();
+    setQuestions([
+      { key: 'desk', type: 'choice', instructions: 'Which desk should handle this ticket?', criteria: 'billing: Invoices, card charges, upgrades, payment failures.\ntechnical: API bugs, latency, crashes, integrations.\nsales: Contracts, volume pricing, RFPs.' },
+      { key: 'refund', type: 'noul', instructions: 'Is the customer asking for money back?' }
+    ]);
+    info();
+    $('status').textContent = 'perplexity flash loaded — the cheap model, two questions';
+  });
+
+  $('presetDoc').addEventListener('click', function () {
+    useModel('scaledown/classify-1');
+    $('state').value = 'Read the attached invoice.';
+    $('repeat').value = '1';
+    setQuestions([
+      { key: 'amount_known', type: 'noul', instructions: 'Does the document state an amount due?' },
+      { key: 'category', type: 'choice', instructions: 'What kind of document is this?', criteria: 'invoice: A bill requesting payment.\nstatement: A periodic account summary.\nreceipt: Proof a payment was made.' },
+      { key: 'overdue_risk', type: 'score', instructions: 'How much collection risk does this invoice carry?', criteria: 'Paid on time, no risk\nLate but cooperative\nDisputed or unresponsive\nLegal action likely' }
+    ]);
+    setAttachment('file', simplePdf(INVOICE), 'invoice-2026-4471.pdf');
+    rules();
+    $('status').textContent = 'scaledown document loaded — one document, three questions';
+  });
+
+  $('presetGemini').addEventListener('click', function () {
+    useModel('google/gemini-decision-1');
+    $('state').value = 'Read the attached invoice.';
+    $('repeat').value = '1';
+    setQuestions([
+      { key: 'amount_known', type: 'noul', instructions: 'Does the document state an amount due?' },
+      { key: 'document_kind', type: 'choice', instructions: 'What kind of document is this?', criteria: 'invoice: A bill requesting payment.\ncontract: Terms of an agreement.\nreceipt: Proof a payment was made.' }
+    ]);
+    setAttachment('file', simplePdf(INVOICE), 'invoice-2026-4471.pdf');
+    rules();
+    $('status').textContent = 'gemini document loaded — pdf, csv and office, data URL or typed URL';
   });
 
   $('copy').addEventListener('click', function () {
-    var text = preview();
-    if (navigator.clipboard) navigator.clipboard.writeText(text);
+    if (navigator.clipboard) navigator.clipboard.writeText(preview());
     $('hint').textContent = 'request copied';
     setTimeout(function () { $('hint').textContent = ''; }, 1600);
   });
 
+  fetch('/api/decisions/models').then(function (r) { return r.json(); }).then(function (data) {
+    var models = (data && data.models) || [];
+    models.forEach(function (m) { catalogue[m.id] = m; });
+    var select = $('model');
+    select.textContent = '';
+    if (!models.length) {
+      $('modelNote').textContent = 'catalogue unavailable — type an id below';
+      return;
+    }
+    function fill(label, list) {
+      var g = document.createElement('optgroup');
+      g.label = label + ' (' + list.length + ')';
+      list.forEach(function (m) {
+        var o = document.createElement('option');
+        o.value = m.id;
+        o.textContent = m.id + (m.ctx ? '  ' + Math.round(m.ctx / 1000) + 'k' : '') + (m.inp ? '  $' + m.inp + '/M' : '');
+        g.appendChild(o);
+      });
+      select.appendChild(g);
+    }
+    var docs = models.filter(function (m) { return m.file; });
+    var pics = models.filter(function (m) { return m.image && !m.file; });
+    var text = models.filter(function (m) { return !m.image && !m.file; });
+    if (text.length) fill('text', text);
+    if (pics.length) fill('sees an image', pics);
+    if (docs.length) fill('reads a document', docs);
+    if (models.some(function (m) { return m.id === 'perplexity/pplx-decider-v1.2'; })) select.value = 'perplexity/pplx-decider-v1.2';
+    $('modelNote').textContent = models.length + ' decisions models · ' + pics.length + ' read an image · ' + docs.length + ' read a document';
+    rules();
+  }).catch(function () { $('modelNote').textContent = 'catalogue unavailable — type an id below'; });
+
+  // ---- snapshots -----------------------------------------------------------
+  function loadSnapshots() {
+    try {
+      var raw = localStorage.getItem(STORE);
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (error) { return []; }
+  }
+
+  function saveSnapshots() {
+    try { localStorage.setItem(STORE, JSON.stringify(snapshots.slice(0, 24))); } catch (error) {}
+    renderSnapshots();
+  }
+
+  function label(s, i) { return '#' + (snapshots.length - i) + ' · ' + s.model.replace(/^.*\//, '') + ' · ' + s.keys.length + 'q · ' + (s.tokens || '?') + ' tok'; }
+
+  var pickedA = false;
+  var pickedB = false;
+
+  function renderSnapshots() {
+    var a = $('snapA');
+    var b = $('snapB');
+    var keepA = a.value, keepB = b.value;
+    a.textContent = ''; b.textContent = '';
+    snapshots.forEach(function (s, i) {
+      [a, b].forEach(function (sel) {
+        var o = document.createElement('option');
+        o.value = String(i);
+        o.textContent = label(s, i);
+        sel.appendChild(o);
+      });
+    });
+    if (snapshots.length) {
+      // a fresh run makes the newest the comparison and the one before it the
+      // baseline; a choice he made by hand is kept until he changes it again.
+      a.value = pickedA && keepA ? keepA : String(Math.min(1, snapshots.length - 1));
+      b.value = pickedB && keepB ? keepB : '0';
+      $('snapNote').textContent = snapshots.length + ' stored in this browser · newest first in the runs table';
+      renderDiff();
+    } else {
+      $('snapNote').textContent = 'no snapshots yet — every run stores one';
+      $('diffTable').style.display = 'none';
+    }
+  }
+
+  function valueOf(answer) {
+    if (!answer) return null;
+    if (answer.noul !== undefined) return Number(answer.noul);
+    if (answer.score !== undefined) return Number(answer.score);
+    if (answer.choice !== undefined) return answer.choice;
+    return null;
+  }
+
+  function show(value) {
+    if (value === null || value === undefined) return '—';
+    return typeof value === 'number' ? (Number.isInteger(value) ? String(value) : value.toFixed(3)) : String(value);
+  }
+
+  function renderDiff() {
+    var A = snapshots[Number($('snapA').value)];
+    var B = snapshots[Number($('snapB').value)];
+    if (!A || !B) return;
+    var body = $('diff');
+    body.textContent = '';
+    var keys = {};
+    A.keys.concat(B.keys).forEach(function (k) { keys[k] = true; });
+    Object.keys(keys).forEach(function (k) {
+      var av = valueOf(A.answers[k]);
+      var bv = valueOf(B.answers[k]);
+      var tr = document.createElement('tr');
+      var delta = '—';
+      var cls = 'same';
+      if (av === null || bv === null) {
+        delta = av === null ? 'only in b' : 'only in a';
+        cls = 'same';
+      } else if (typeof av === 'number' && typeof bv === 'number') {
+        var d = bv - av;
+        delta = (d > 0 ? '+' : '') + d.toFixed(3);
+        cls = Math.abs(d) < 0.001 ? 'same' : (d > 0 ? 'up' : 'down');
+      } else if (av !== null && bv !== null) {
+        delta = av === bv ? 'same' : 'changed';
+        cls = av === bv ? 'same' : 'up';
+      }
+      [k, show(av), show(bv), delta].forEach(function (text, i) {
+        var td = document.createElement('td');
+        td.textContent = text;
+        if (i === 0) td.className = 'n';
+        if (i === 3) td.className = 'delta ' + cls;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    var sameState = A.stateText === B.stateText;
+    var meta = document.createElement('tr');
+    meta.innerHTML = '<td class="n">state · tokens · cost</td>'
+      + '<td>' + (sameState ? 'same' : 'changed') + ' · ' + (A.tokens || '?') + ' · $' + A.cost + '</td>'
+      + '<td>' + (sameState ? 'same' : 'changed') + ' · ' + (B.tokens || '?') + ' · $' + B.cost + '</td>'
+      + '<td class="delta same">' + (A.tokens && B.tokens ? (B.tokens - A.tokens > 0 ? '+' : '') + (B.tokens - A.tokens) + ' tok' : '—') + '</td>';
+    body.appendChild(meta);
+    $('diffTable').style.display = '';
+  }
+
+  $('snapA').addEventListener('change', function () { pickedA = true; renderDiff(); });
+  $('snapB').addEventListener('change', function () { pickedB = true; renderDiff(); });
+  $('clearSnaps').addEventListener('click', function () {
+    snapshots = [];
+    saveSnapshots();
+    $('diffTable').style.display = 'none';
+  });
+  $('dlSnaps').addEventListener('click', function () {
+    var blob = new Blob([JSON.stringify(snapshots, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'decisions-snapshots.json';
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+  });
+
+  function answerLine(data) {
+    var answers = (data && data.answers) || {};
+    return Object.keys(answers).map(function (k) {
+      var a = answers[k] || {};
+      if (a.noul !== undefined) return k + ' ' + Number(a.noul).toFixed(3);
+      if (a.choice !== undefined) return k + ' ' + a.choice;
+      if (a.score !== undefined) return k + ' ' + Number(a.score).toFixed(2);
+      return k + ' ?';
+    }).join(' · ');
+  }
+
+  function addRun(row) {
+    runs += 1;
+    var body = $('runs');
+    if (runs === 1) body.textContent = '';
+    var tr = document.createElement('tr');
+    [runs, row.model, row.state, row.answers, row.tokens, row.cost, row.ms].forEach(function (value, index) {
+      var td = document.createElement('td');
+      if (index === 0 || index === 3) td.className = 'n';
+      td.textContent = value == null || value === '' ? '—' : String(value);
+      tr.appendChild(td);
+    });
+    body.insertBefore(tr, body.firstChild);
+  }
+
   $('send').addEventListener('click', async function () {
     var payload = body();
+    var started = Date.now();
     $('send').disabled = true;
     $('status').textContent = 'sending…';
     $('out').textContent = '—';
-    var started = Date.now();
     try {
       var res = await fetch('/api/decisions', {
         method: 'POST',
@@ -194,32 +633,71 @@ const LAB = String.raw`<!DOCTYPE html>
       });
       var data = await res.json().catch(function () { return null; });
       var ms = Date.now() - started;
+      var usage = (data && data.usage) || {};
+      var cost = usage.cost;
+      var tokens = usage.input_tokens;
+      var said = answerLine(data);
+      var err = data && data.error ? String(data.error.code || data.error.message || 'error') : '';
       $('out').textContent = JSON.stringify(data, null, 2);
-      var cost = data && data.usage && data.usage.cost;
-      var answer = data && data.answers && data.answers[Object.keys(data.answers)[0]];
-      var said = answer ? (answer.noul !== undefined ? 'noul ' + answer.noul.toFixed(3) : JSON.stringify(answer)) : '';
       $('status').innerHTML = '<b class="' + (res.ok ? 'ok' : 'err') + '">' + res.status + '</b> · ' + ms + ' ms'
         + (data && data.model ? ' · <b>' + data.model + '</b>' : '')
         + (said ? ' · ' + said : '')
+        + (err ? ' · <span class="err">' + err + '</span>' : '')
         + (cost !== undefined && cost !== null ? ' · $' + cost : '');
-      $('sentLabel').style.display = '';
+
+      var text = stateText();
+      var qCount = Object.keys(payload.questions).length;
+      var perK = cost && text.length ? '$' + (cost / (text.length / 1000)).toFixed(6) : '—';
+      $('lever').innerHTML = '<div>state <b>' + text.length + '</b> chars</div>'
+        + '<div>questions <b>' + qCount + '</b></div>'
+        + (tokens ? '<div>input tokens <b>' + tokens + '</b></div>' : '')
+        + (cost !== undefined && cost !== null ? '<div>this call <b>$' + cost + '</b></div>' : '')
+        + '<div>per 1k chars <b>' + perK + '</b></div>'
+        + (tokens && cost ? '<div>per 1k tokens <b>$' + (cost / (tokens / 1000)).toFixed(6) + '</b></div>' : '');
+
+      var stateDesc = typeof payload.state === 'string'
+        ? payload.state.length + ' chars'
+        : (attachment ? attachment.kind + ' ' + Math.round(attachment.data.length / 1024) + 'kb' : '');
+      addRun({
+        model: payload.model,
+        state: stateDesc,
+        answers: said || err,
+        tokens: tokens || '—',
+        cost: cost === undefined || cost === null ? '—' : '$' + cost,
+        ms: ms
+      });
+
+      if (res.ok && data && data.answers) {
+        snapshots.unshift({
+          at: new Date().toISOString(),
+          model: payload.model,
+          served: data.model || payload.model,
+          stateText: text,
+          attachment: attachment ? attachment.label : null,
+          questions: payload.questions,
+          keys: Object.keys(payload.questions),
+          answers: data.answers,
+          tokens: tokens || null,
+          cost: cost === undefined || cost === null ? null : cost,
+          ms: ms
+        });
+        pickedA = false;
+        pickedB = false;
+        saveSnapshots();
+      }
       $('sentWrap').style.display = '';
       $('sent').textContent = preview();
-    } catch (err) {
-      $('status').innerHTML = '<b class="err">failed</b> · ' + (err && err.message ? err.message : String(err));
+    } catch (error) {
+      $('status').innerHTML = '<b class="err">failed</b> · ' + (error && error.message ? error.message : String(error));
     } finally {
       $('send').disabled = false;
     }
   });
 
-  // The button stays off until something is worth sending, so a stray click cannot
-  // spend a call on an empty state.
-  function gate() { $('send').disabled = !stateText().trim() && !imageData; }
-  $('state').addEventListener('input', gate);
-  $('image').addEventListener('change', gate);
-  $('clearImage').addEventListener('click', gate);
-  gate();
+  addQuestion({ key: 'marker', type: 'noul', instructions: 'Is the exact marker ORANGE-731 present in the state?' });
   info();
+  rules();
+  renderSnapshots();
 })();
 </script>
 </body></html>`;

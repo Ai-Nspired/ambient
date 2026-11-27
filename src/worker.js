@@ -1741,7 +1741,15 @@ async function handleDecisions(request, env) {
     state = state.slice(0, 8).map((part) => {
       if (typeof part === "string") return part.slice(0, 2e5);
       const url = part && part.type === "image_url" && part.image_url && typeof part.image_url.url === "string" ? part.image_url.url : "";
-      return /^data:image\/(png|jpeg|webp);base64,/.test(url) ? { type: "image_url", image_url: { url: url.slice(0, 6 * 1024 * 1024) } } : null;
+      if (/^data:image\/(png|jpeg|webp);base64,/.test(url)) return { type: "image_url", image_url: { url: url.slice(0, 6 * 1024 * 1024) } };
+      // A document is the same shape Chat Completions uses, and only a data URL is
+      // carried: ScaleDown refuses a remote URL outright, and a model that cannot
+      // read a file says so with its own 400 rather than being guessed at here.
+      const file = part && part.type === "file" && part.file && typeof part.file.file_data === "string" ? part.file.file_data : "";
+      if (/^data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i.test(file)) {
+        return { type: "file", file: { file_data: file.slice(0, 8 * 1024 * 1024), filename: String(part.file.filename || "document").slice(0, 120) } };
+      }
+      return null;
     }).filter(Boolean);
   } else {
     return json({ error: { code: "state_required", message: "Send state as text, or as an array of parts." } }, 400);
@@ -1775,6 +1783,56 @@ async function handleDecisions(request, env) {
   return response;
 }
 __name(handleDecisions, "handleDecisions");
+
+/**
+ * The Decisions catalogue, read from the public models API.
+ *
+ * Which models exist and which of them can see a picture is not something the page
+ * should have to know by heart. No key is involved: this list is public, and it is
+ * passed through so the workbench can offer the names instead of asking for one.
+ */
+async function handleDecisionModels() {
+  const wanted = [
+    "https://openrouter.ai/api/v1/models?output_modalities=decisions",
+    "https://openrouter.ai/api/v1/models?output_modalities=decisions&input_modalities=image",
+    "https://openrouter.ai/api/v1/models?output_modalities=decisions&input_modalities=file"
+  ];
+  const seen = {};
+  const failures = [];
+  for (const url of wanted) {
+    try {
+      const response = await fetch(url, { headers: { accept: "application/json" } });
+      if (!response.ok) {
+        failures.push(url + " -> " + response.status);
+        continue;
+      }
+      const body = await response.json().catch(() => null);
+      const rows = (body && Array.isArray(body.data)) ? body.data : [];
+      const imageOnly = url.indexOf("input_modalities=image") > 0;
+      const fileOnly = url.indexOf("input_modalities=file") > 0;
+      for (const row of rows) {
+        if (!row || !row.id) continue;
+        const price = (row.pricing && Number(row.pricing.prompt)) || 0;
+        const entry = seen[row.id] || {
+          id: row.id, name: row.name || row.id, image: false, file: false,
+          ctx: row.context_length || null,
+          inp: price ? Math.round(price * 1e6 * 1e4) / 1e4 : null
+        };
+        if (imageOnly) entry.image = true;
+        if (fileOnly) entry.file = true;
+        seen[row.id] = entry;
+      }
+    } catch (err) {
+      failures.push(url + " -> " + String((err && err.message) || err).slice(0, 120));
+    }
+  }
+  const models = Object.keys(seen).sort().map((id) => seen[id]);
+  const response = json({ ok: models.length > 0, count: models.length, models, failures });
+  response.headers.set("cache-control", "no-store");
+  return response;
+}
+__name(handleDecisionModels, "handleDecisionModels");
+
 
 async function handleAmbient(request, env) {
   let body;
@@ -2728,6 +2786,7 @@ var worker_default = {
     // The Decisions workbench: the page, and the one route it posts to. The key stays
     // on the Worker side; the proxy that already holds it is the only thing called.
     if (url.pathname === "/api/decisions" && request.method === "POST") return handleDecisions(request, env);
+    if (url.pathname === "/api/decisions/models" && request.method === "GET") return handleDecisionModels();
     if (url.pathname === "/api/ambient" && request.method === "POST") {
       const response = await handleAmbient(request, env);
       response.headers.set("access-control-allow-origin", "*");
