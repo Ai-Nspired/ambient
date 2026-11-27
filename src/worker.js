@@ -1,4 +1,5 @@
 import DIAL from "./dial.js";
+import LAB from "./lab.js";
 // Every text model the account can run, read from its own API. The store keeps a
 // shortlist; this is the rest of what it can be told to call.
 var __defProp = Object.defineProperty;
@@ -1544,6 +1545,80 @@ async function handleSandbox(request, env) {
   }
 }
 __name(handleSandbox, "handleSandbox");
+/**
+ * One Decisions call, from the page to the proxy.
+ *
+ * The shape is the API's own — model, state, typed questions — and nothing is
+ * rewritten on the way through: a test that answers differently here than it does
+ * from curl is a test of this route, not of the model. State may be text or the
+ * parts array the image tests need, and only image parts are carried.
+ */
+async function handleDecisions(request, env) {
+  const origin = request.headers.get("origin");
+  if (origin) {
+    // A page on another site does not get to spend this account's credits by
+    // pointing a browser at the route.
+    let same = false;
+    try {
+      same = new URL(origin).host === new URL(request.url).host;
+    } catch {
+      same = false;
+    }
+    if (!same) return json({ error: { code: "cross_origin", message: "Send this from the workbench itself." } }, 403);
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: { code: "invalid_json", message: "Send { model, state, questions }." } }, 400);
+  }
+  const model = String(body?.model || "perplexity/pplx-decider-v1.2").slice(0, 120);
+  const questions = body?.questions;
+  if (!questions || typeof questions !== "object" || Array.isArray(questions) || !Object.keys(questions).length) {
+    return json({ error: { code: "questions_required", message: "Send at least one typed question, keyed by name." } }, 400);
+  }
+  let state = body?.state;
+  if (typeof state === "string") {
+    state = state.slice(0, 2e5);
+  } else if (Array.isArray(state)) {
+    state = state.slice(0, 8).map((part) => {
+      if (typeof part === "string") return part.slice(0, 2e5);
+      const url = part && part.type === "image_url" && part.image_url && typeof part.image_url.url === "string" ? part.image_url.url : "";
+      return /^data:image\/(png|jpeg|webp);base64,/.test(url) ? { type: "image_url", image_url: { url: url.slice(0, 6 * 1024 * 1024) } } : null;
+    }).filter(Boolean);
+  } else {
+    return json({ error: { code: "state_required", message: "Send state as text, or as an array of parts." } }, 400);
+  }
+  if (!state || (Array.isArray(state) && !state.length)) {
+    return json({ error: { code: "state_empty", message: "The state is empty; there is nothing to decide about." } }, 400);
+  }
+  const proxy = env && env.AI_PROXY && typeof env.AI_PROXY.fetch === "function" ? env.AI_PROXY : null;
+  if (!proxy) {
+    return json({ error: { code: "proxy_unbound", message: "The proxy that holds the key is not bound." } }, 503);
+  }
+  let upstream;
+  try {
+    upstream = await proxy.fetch(new Request("https://ai-proxy/api/decide", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, state, questions })
+    }));
+  } catch (err) {
+    return json({ error: { code: "proxy_unreachable", message: String((err && err.message) || err).slice(0, 300) } }, 502);
+  }
+  const raw = await upstream.text().catch(() => "");
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = null;
+  }
+  const response = json(data || { error: { code: "unreadable_upstream", message: raw.slice(0, 400) } }, upstream.ok ? 200 : upstream.status);
+  response.headers.set("cache-control", "no-store");
+  return response;
+}
+__name(handleDecisions, "handleDecisions");
+
 async function handleAmbient(request, env) {
   let body;
   try {
@@ -2493,6 +2568,9 @@ var worker_default = {
     if (url.pathname === "/api/diff" && request.method === "POST") return handleDiff(request, env);
     if (url.pathname === "/api/look" && request.method === "POST") return handleLook(request, env);
     if (url.pathname === "/api/sandbox" && request.method === "POST") return handleSandbox(request, env);
+    // The Decisions workbench: the page, and the one route it posts to. The key stays
+    // on the Worker side; the proxy that already holds it is the only thing called.
+    if (url.pathname === "/api/decisions" && request.method === "POST") return handleDecisions(request, env);
     if (url.pathname === "/api/ambient" && request.method === "POST") {
       const response = await handleAmbient(request, env);
       response.headers.set("access-control-allow-origin", "*");
@@ -2567,6 +2645,9 @@ var worker_default = {
       const response = json({ ok: true, pick });
       response.headers.set("access-control-allow-origin", "*");
       return response;
+    }
+    if (url.pathname === "/lab" && request.method === "GET") {
+      return new Response(LAB, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     }
     if (url.pathname === "/" && request.method === "GET") {
       return new Response(DIAL, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
