@@ -62,10 +62,36 @@ const LAB = String.raw`<!DOCTYPE html>
   .snaps { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px; }
   .snaps > div { flex:1; min-width:180px; }
   .delta.up { color:var(--bad); } .delta.down { color:var(--good); } .delta.same { color:var(--dim); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(238px,1fr)); gap:9px; }
+  .card { text-align:left; background:#0f141a; border:1px solid var(--line); border-left:3px solid var(--good); border-radius:8px; padding:9px 10px 10px; color:var(--ink); font:inherit; cursor:pointer; }
+  .card.fail { border-left-color:var(--bad); }
+  .card .ct { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--dim); }
+  .card .cm { margin-top:5px; font-size:11px; color:var(--dim); }
+  .card .ca { margin-top:5px; font-size:11.5px; color:#c6cfdb; word-break:break-word; }
+  .card:hover { border-color:#2f3d4f; }
+  .q .exp { margin-top:8px; }
+  .q .exp input { width:180px; padding:6px 8px; font-size:12px; }
+  .q .exp span { display:block; margin-top:4px; font-size:11px; color:var(--dim); }
+  .walks { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:9px; }
+  .walk { text-align:left; background:#0f141a; border:1px solid var(--line); border-radius:8px; padding:10px; color:var(--ink); font:inherit; cursor:pointer; }
+  .walk:hover { border-color:#2f3d4f; }
+  .walk b { display:block; font-size:12px; letter-spacing:.04em; margin-bottom:4px; }
+  .walk span { display:block; font-size:11.5px; color:var(--dim); line-height:1.45; }
+  .walk.on { border-color:var(--accent); }
 </style></head>
 <body><main>
   <h1>decisions — hands on</h1>
   <p class="lede">One state, many questions, one call. The context is what you pay for, so make it long and ask everything at once; then snapshot the answers and diff them to see which question actually moved.</p>
+
+  <div class="status">walkthroughs — load one and walk it</div>
+  <section style="margin-bottom:16px">
+    <div class="walks" id="walks"></div>
+    <div class="actions" style="margin-top:10px;display:none" id="walkNav">
+      <span class="note" id="walkStep"></span>
+      <button class="ghost tiny" id="walkNext" type="button">next step →</button>
+    </div>
+    <div class="note" id="walkNote" style="margin-top:10px">Each walk loads its own state, model and questions, with an expected answer on every question — so the card that comes back says right or wrong, not just answered.</div>
+  </section>
 
   <div class="grid">
     <section>
@@ -164,6 +190,18 @@ const LAB = String.raw`<!DOCTYPE html>
     </table>
   </section>
 
+  <div class="status">result cards — every run, answered or refused</div>
+  <section>
+    <div class="actions" style="margin-bottom:10px">
+      <select id="cardFilter" style="flex:0 0 160px"><option value="all">all</option><option value="ok">answered</option><option value="fail">refused</option></select>
+      <button class="ghost tiny" id="dlCards" type="button">download json</button>
+      <input id="cardsFile" type="file" accept="application/json" style="flex:0 0 190px">
+      <button class="ghost tiny" id="clearCards" type="button">clear</button>
+      <span class="note" id="cardsNote">no cards yet — every run and every ladder rung drops one here</span>
+    </div>
+    <div class="cards" id="cards"></div>
+  </section>
+
   <div class="status">snapshots &amp; diff</div>
   <section>
     <div class="snaps">
@@ -192,6 +230,7 @@ const LAB = String.raw`<!DOCTYPE html>
   var catalogue = {};
   var STORE = 'decisions.snapshots.v1';
   var snapshots = loadSnapshots();
+  var walk = { recipe: null, step: 0 };
 
   function useModel(id) {
     var select = $('model');
@@ -237,12 +276,15 @@ const LAB = String.raw`<!DOCTYPE html>
       + '<textarea class="qinst" spellcheck="false" placeholder="instructions"></textarea>'
       + '<div class="crit"><textarea class="qcrit" spellcheck="false" placeholder="key: description"></textarea>'
       + '<div class="note critnote" style="margin-top:6px">choice: one per line, key: description. score: one level per line, easiest to hardest, 2–10 of them.</div></div>'
+      + '<div class="exp"><input class="qexp" type="text" spellcheck="false" placeholder="expect: yes / no">'
+      + '<span>the answer you believe is right — a card grades against it</span></div>'
       + '<div class="foot"><button class="ghost tiny qdel" type="button">remove</button></div>';
     $('questions').appendChild(card);
     card.querySelector('.qkey').value = (q && q.key) || 'question_' + (questionCards().length + 1);
     card.querySelector('.qinst').value = (q && q.instructions) || '';
     card.querySelector('.qtype').value = (q && q.type) || 'noul';
     card.querySelector('.qcrit').value = (q && q.criteria) || '';
+    card.querySelector('.qexp').value = (q && q.expect) || '';
     card.querySelector('.qtype').addEventListener('change', function () { syncCrit(card); });
     card.querySelector('.qdel').addEventListener('click', function () {
       if (questionCards().length === 1) { $('hint').textContent = 'keep at least one question'; return; }
@@ -692,6 +734,30 @@ const LAB = String.raw`<!DOCTYPE html>
         ms: ms
       });
 
+      var expected = expectations();
+      var graded = gradeAll(data && data.answers, expected);
+      if (graded) said = said + ' · ' + graded.right + '/' + graded.total + ' right';
+
+      addCard({
+        ok: Boolean(res.ok && data && data.answers),
+        status: res.status,
+        model: payload.model,
+        served: (data && data.model) || null,
+        kind: typeof payload.state === 'string' ? 'text' : (attachment ? attachment.kind : 'text'),
+        chars: text.length,
+        tokens: tokens || null,
+        cost: cost === undefined || cost === null ? null : cost,
+        ms: ms,
+        summary: said || '',
+        answers: (data && data.answers) || null,
+        error: data && data.error ? data.error : (res.ok ? null : { code: 'http_' + res.status, message: '' }),
+        questions: payload.questions,
+        expected: expected,
+        graded: graded,
+        recipe: walk.recipe ? walk.recipe.title : null,
+        stateHead: text.slice(0, 200)
+      });
+
       if (res.ok && data && data.answers) {
         snapshots.unshift({
           at: new Date().toISOString(),
@@ -713,6 +779,15 @@ const LAB = String.raw`<!DOCTYPE html>
       $('sentWrap').style.display = '';
       $('sent').textContent = preview();
     } catch (error) {
+      addCard({
+        ok: false,
+        status: 'net',
+        model: payload.model,
+        chars: stateText().length,
+        questions: payload.questions,
+        error: { code: 'client', message: error && error.message ? error.message : String(error) },
+        summary: ''
+      });
       $('status').innerHTML = '<b class="err">failed</b> · ' + (error && error.message ? error.message : String(error));
     } finally {
       $('send').disabled = false;
@@ -821,7 +896,8 @@ const LAB = String.raw`<!DOCTYPE html>
         key: card.querySelector('.qkey').value,
         type: card.querySelector('.qtype').value,
         instructions: card.querySelector('.qinst').value,
-        criteria: card.querySelector('.qcrit').value
+        criteria: card.querySelector('.qcrit').value,
+        expect: card.querySelector('.qexp').value
       };
     });
     var at = -1;
@@ -990,12 +1066,416 @@ const LAB = String.raw`<!DOCTYPE html>
       }
       results.push(row);
       renderLadder(results);
+      addCard({
+        ok: row.status === 200,
+        status: row.status,
+        model: model,
+        kind: 'text',
+        chars: row.chars,
+        tokens: row.tokens || null,
+        cost: row.cost === undefined ? null : row.cost,
+        ms: row.ms || null,
+        rung: (i + 1) + ' · ' + row.chars + ' chars',
+        summary: row.answers || '',
+        answers: null,
+        error: row.status === 200 ? null : { code: 'rung_' + row.status, message: row.answers || '' },
+        questions: questions,
+        stateHead: 'ladder rung at ' + row.chars + ' chars'
+      });
     }
     var last = results[results.length - 1] || {};
     $('ladderNote').textContent = 'stopped at ' + (last.chars || 0) + ' chars'
       + (fails >= 2 ? ' · two failures in a row' : ' · every rung answered');
     $('runLadder').disabled = false;
   });
+
+  // ---- result cards --------------------------------------------------------
+  // A refusal is a result. The card set keeps both, with the questions that
+  // produced them, so a shape that fell over at 1.5M chars is still there to
+  // read a week later instead of being re-discovered.
+  var CARDS = 'decisions.cards.v1';
+
+  function readCards() {
+    try {
+      var raw = localStorage.getItem(CARDS);
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (error) { return []; }
+  }
+
+  var cards = readCards();
+
+  function saveCards() {
+    try { localStorage.setItem(CARDS, JSON.stringify(cards.slice(0, 200))); } catch (error) {}
+    renderCards();
+  }
+
+  function polarity(answers) {
+    var yes = 0;
+    var no = 0;
+    Object.keys(answers || {}).forEach(function (k) {
+      var a = answers[k] || {};
+      if (a.noul !== undefined) { if (Number(a.noul) >= 0.5) yes += 1; else no += 1; }
+    });
+    return { yes: yes, no: no };
+  }
+
+  function expectations() {
+    var out = {};
+    questionCards().forEach(function (card) {
+      var key = (card.querySelector('.qkey').value || '').trim() || 'question';
+      var raw = (card.querySelector('.qexp').value || '').trim();
+      if (raw) out[key] = raw;
+    });
+    return out;
+  }
+
+  function gradeOne(answer, expect) {
+    if (!answer) return null;
+    var e = String(expect).trim().toLowerCase();
+    if (answer.noul !== undefined) {
+      var yes = Number(answer.noul) >= 0.5;
+      if (['yes', 'true', '1', 'y'].indexOf(e) >= 0) return yes;
+      if (['no', 'false', '0', 'n'].indexOf(e) >= 0) return !yes;
+      return null;
+    }
+    if (answer.choice !== undefined) return String(answer.choice).toLowerCase() === e;
+    if (answer.score !== undefined) {
+      var n = Number(e);
+      return isNaN(n) ? null : Math.abs(Number(answer.score) - n) <= 0.5;
+    }
+    return null;
+  }
+
+  function gradeAll(answers, expected) {
+    var keys = Object.keys(expected || {});
+    var right = 0;
+    var graded = 0;
+    var wrong = [];
+    keys.forEach(function (key) {
+      var verdict = gradeOne((answers || {})[key], expected[key]);
+      if (verdict === null) return;
+      graded += 1;
+      if (verdict) right += 1;
+      else wrong.push(key + ' expected ' + expected[key]);
+    });
+    return graded ? { total: graded, right: right, wrong: wrong } : null;
+  }
+
+  function addCard(record) {
+    record.id = 'c' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+    record.at = record.at || new Date().toISOString();
+    cards.unshift(record);
+    saveCards();
+  }
+
+  function shortModel(id) {
+    var tail = String(id || '').split('/').pop();
+    return tail.replace(/-\d{8}$/, '');
+  }
+
+  function renderCards() {
+    var filter = $('cardFilter').value;
+    var body = $('cards');
+    body.textContent = '';
+    var list = cards.filter(function (card) {
+      if (filter === 'ok') return card.ok;
+      if (filter === 'fail') return !card.ok;
+      return true;
+    });
+    var answered = cards.filter(function (c) { return c.ok; }).length;
+    var gradedCards = cards.filter(function (c) { return c.graded; });
+    var right = gradedCards.reduce(function (sum, c) { return sum + c.graded.right; }, 0);
+    var total = gradedCards.reduce(function (sum, c) { return sum + c.graded.total; }, 0);
+    $('cardsNote').textContent = cards.length
+      ? cards.length + ' cards · ' + answered + ' answered · ' + (cards.length - answered) + ' refused'
+        + (total ? ' · ' + right + '/' + total + ' right where an expectation was set' : '')
+      : 'no cards yet — every run and every ladder rung drops one here';
+    list.slice(0, 60).forEach(function (card) {
+      var el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'card' + (card.ok ? '' : ' fail');
+      var pol = polarity(card.answers);
+      var head = document.createElement('div');
+      head.className = 'ct';
+      head.innerHTML = '<span>' + (card.ok ? 'answered' : 'refused') + '</span><span>' + shortModel(card.model) + '</span>';
+      var meta = document.createElement('div');
+      meta.className = 'cm';
+      meta.textContent = (card.chars ? card.chars + ' chars' : '—')
+        + (card.tokens ? ' · ' + card.tokens + ' tok' : '')
+        + (card.cost === null || card.cost === undefined ? '' : ' · $' + card.cost)
+        + (card.ms ? ' · ' + (card.ms / 1000).toFixed(1) + 's' : '');
+      var ans = document.createElement('div');
+      ans.className = 'ca';
+      ans.textContent = card.ok
+        ? (card.summary || '') + (pol.yes || pol.no ? '  (' + pol.yes + ' yes · ' + pol.no + ' no)' : '')
+        : (card.error ? (card.error.code || '') + ' · ' + String(card.error.message || '').slice(0, 90) : 'failed');
+      var foot = document.createElement('div');
+      foot.className = 'cm';
+      foot.textContent = (card.rung ? 'ladder rung ' + card.rung : (card.questions ? Object.keys(card.questions).length + ' questions' : ''))
+        + (card.graded ? ' · ' + card.graded.right + '/' + card.graded.total + ' right' : '')
+        + (card.recipe ? ' · ' + card.recipe : '');
+      el.appendChild(head);
+      el.appendChild(meta);
+      el.appendChild(ans);
+      el.appendChild(foot);
+      el.addEventListener('click', function () {
+        $('out').textContent = JSON.stringify(card, null, 2);
+        $('sentWrap').style.display = '';
+        $('sent').textContent = JSON.stringify({ model: card.model, chars: card.chars, questions: card.questions }, null, 2);
+        $('status').textContent = 'card · ' + card.at + ' · ' + card.model + (card.served ? ' served as ' + card.served : '');
+      });
+      body.appendChild(el);
+    });
+  }
+
+  $('cardFilter').addEventListener('change', renderCards);
+
+  $('clearCards').addEventListener('click', function () {
+    cards = [];
+    saveCards();
+  });
+
+  $('dlCards').addEventListener('click', function () {
+    var blob = new Blob([JSON.stringify(cards, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'decisions-cards.json';
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+  });
+
+  $('cardsFile').addEventListener('change', function (ev) {
+    var file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var list = JSON.parse(String(reader.result || '[]'));
+        if (!Array.isArray(list)) throw new Error('not a card list');
+        list.forEach(function (card) {
+          if (!card || !card.model) return;
+          if (cards.some(function (c) { return c.id && c.id === card.id; })) return;
+          cards.push(card);
+        });
+        cards.sort(function (x, y) { return String(y.at).localeCompare(String(x.at)); });
+        saveCards();
+        $('cardsNote').textContent = 'imported ' + list.length + ' cards';
+      } catch (error) {
+        $('cardsNote').textContent = 'import failed: ' + (error && error.message ? error.message : 'bad json');
+      }
+      ev.target.value = '';
+    };
+    reader.readAsText(file);
+  });
+
+  renderCards();
+
+  // ---- walkthroughs --------------------------------------------------------
+  // Each walk is a fixture, a model, and a predicate set with the answers believed
+  // right, so the path can be walked again instead of remembered.
+  function fillTo(text, chars) {
+    var base = String(text).replace(/\s+/g, ' ').trim() + ' ';
+    var out = '';
+    while (out.length < chars) out += base;
+    return out.slice(0, chars);
+  }
+
+  var STATEMENT_A = 'Statement of R. Pettigrew, recorded 2026-03-04. I was at the shop on Delano that evening until about nine. I did not speak to Mr. Aguilar that evening, not that I recall. I went straight home afterwards.';
+  var STATEMENT_B = 'Statement of R. Pettigrew, recorded 2026-06-19. I left the shop around ten that night. I stopped at the market on Delano to buy cigarettes. Aguilar was at the counter and we spoke for a minute or two about the pump.';
+  var STATEMENT_C = 'Statement of R. Pettigrew, recorded 2026-09-02. I was at the shop until nine. I never saw Aguilar that night. I was home by ten.';
+
+  var CODE_BEFORE = '// app.js, 2026-11-20\n'
+    + 'const STATE_CAP = 2e5;\n\n'
+    + 'async function decide(request, proxy) {\n'
+    + '  const body = await request.json();\n'
+    + '  return fetch(proxy + \'/api/decide\', { method: \'POST\', body: JSON.stringify(body) });\n'
+    + '}\n\n'
+    + 'export default {\n'
+    + '  async fetch(request, env) {\n'
+    + '    const url = new URL(request.url);\n'
+    + '    if (url.pathname === \'/api/decide\') return decide(request, env[\'AI-PROXY\']);\n'
+    + '    if (url.pathname === \'/lab\') return new Response(LAB, { headers: { \'content-type\': \'text/html\' } });\n'
+    + '    return new Response(\'not found\', { status: 404 });\n'
+    + '  }\n'
+    + '};\n';
+
+  var CODE_AFTER = '// app.js, 2026-11-27\n'
+    + 'const STATE_CAP = 15e5;\n\n'
+    + 'async function decide(request, proxy) {\n'
+    + '  const body = await request.json();\n'
+    + '  return fetch(proxy + \'/api/decide\', { method: \'POST\', body: JSON.stringify(body) });\n'
+    + '}\n\n'
+    + 'export default {\n'
+    + '  async fetch(request, env) {\n'
+    + '    const url = new URL(request.url);\n'
+    + '    if (url.pathname === \'/api/decide\') return decide(request, env[\'AI-PROXY\']);\n'
+    + '    if (url.pathname === \'/api/models\') return new Response(catalogue(), { headers: { \'content-type\': \'application/json\' } });\n'
+    + '    if (url.pathname === \'/api/lab\') return new Response(LAB, { headers: { \'content-type\': \'text/html\' } });\n'
+    + '    return new Response(\'not found\', { status: 404 });\n'
+    + '  }\n'
+    + '};\n';
+
+  var EXAM_QS = [
+    { key: 'at_shop', type: 'noul', instructions: 'Does this statement place the witness at the shop that evening?', expect: 'yes' },
+    { key: 'with_aguilar', type: 'noul', instructions: 'Does this statement say the witness spoke with Mr. Aguilar that evening?', expect: 'no' },
+    { key: 'left_hour', type: 'choice', instructions: 'What time does this statement say the witness left the shop?', criteria: 'nine: About nine.\nten: About ten.\nnot_said: Not stated.', expect: 'nine' },
+    { key: 'market', type: 'noul', instructions: 'Does this statement mention stopping at a market?', expect: 'no' }
+  ];
+
+  var CONFORMANCE_QS = [
+    { key: 'route_path', type: 'choice', instructions: 'Which path serves the lab page?', criteria: "'/lab': The lab page at /lab.\n'/api/lab': The lab page at /api/lab.\nnone: No lab route.", expect: "'/lab'" },
+    { key: 'models_route', type: 'noul', instructions: 'Does this version serve a models catalogue route?', expect: 'no' },
+    { key: 'state_cap', type: 'choice', instructions: 'At what size is the state text truncated?', criteria: '200k: Two hundred thousand characters.\n1.5M: One and a half million characters.', expect: '200k' },
+    { key: 'proxy', type: 'choice', instructions: 'Which binding carries the decisions call?', criteria: 'AI-PROXY: The AI-PROXY service binding.\nARA: The ARA binding.', expect: 'AI-PROXY' }
+  ];
+
+  var FORM_QS_EXPECT = FORM_QS.map(function (q) {
+    var copy = JSON.parse(JSON.stringify(q));
+    if (copy.key === 'case_number' || copy.key === 'checkboxes' || copy.key === 'signature') copy.expect = 'yes';
+    if (copy.key === 'form_kind') copy.expect = 'name_change';
+    return copy;
+  });
+
+  var RECIPES = [
+    {
+      id: 'free-text',
+      title: 'Free text at 60k chars',
+      model: 'perplexity/pplx-decider-v1.3:free',
+      teaches: 'A 60,000-char state on the free model: cost 0, answered in seconds. Nothing in this walk spends credits.',
+      watch: 'tokens climb past 15k while the cost stays $0, and the answers stay put.',
+      steps: [{ label: 'statement repeated to 60k', state: fillTo(STATEMENT_A, 60000), attach: null, questions: EXAM_QS }]
+    },
+    {
+      id: 'cross-exam',
+      title: 'Cross-exam: one predicate set, three statements',
+      model: 'perplexity/pplx-decider-v1.3:free',
+      teaches: 'The same keys asked of three statements months apart. Run step 1, then 2 and 3, and read the diff — it isolates which predicate the witness changed.',
+      watch: 'with_aguilar and left_hour move between steps while at_shop holds. The card is graded against the record as loaded, so step 2 scores wrong on purpose.',
+      steps: [
+        { label: 'statement A, March', state: STATEMENT_A, attach: null, questions: EXAM_QS },
+        { label: 'statement B, June', state: STATEMENT_B, attach: null, questions: EXAM_QS },
+        { label: 'statement C, September', state: STATEMENT_C, attach: null, questions: EXAM_QS }
+      ]
+    },
+    {
+      id: 'code-conformance',
+      title: 'Codebase: same questions, two versions',
+      model: 'perplexity/pplx-decider-v1.3:free',
+      teaches: 'A refactor asked identical questions. What disagrees between the two cards is the change; what agrees is what held.',
+      watch: 'route_path, models_route and state_cap flip between steps; proxy does not.',
+      steps: [
+        { label: 'app.js before', state: CODE_BEFORE, attach: null, questions: CONFORMANCE_QS },
+        {
+          label: 'app.js after', state: CODE_AFTER, attach: null,
+          questions: CONFORMANCE_QS.map(function (q) {
+            var copy = JSON.parse(JSON.stringify(q));
+            if (copy.key === 'route_path') copy.expect = "'/api/lab'";
+            if (copy.key === 'models_route') copy.expect = 'yes';
+            if (copy.key === 'state_cap') copy.expect = '1.5M';
+            return copy;
+          })
+        }
+      ]
+    },
+    {
+      id: 'form-schema',
+      title: 'Form image to a field schema',
+      model: 'perplexity/pplx-decider-flash-v1.2',
+      teaches: 'One drawn court form, four structural questions, about $0.00002. This is the extraction leg your template maker would consume.',
+      watch: 'case_number, form_kind, checkboxes and signature all come back high — the schema is the answer, not a redrawn form.',
+      steps: [{ label: 'judicial-form.png', state: 'Read the attached form image and answer about its structure.', attach: 'form', questions: FORM_QS_EXPECT }]
+    },
+    {
+      id: 'document-pdf',
+      title: 'A PDF document on ScaleDown',
+      model: 'scaledown/classify-1',
+      teaches: 'One kb PDF, three questions, about $0.00025 — and the same document is four times the tokens of an image of the page.',
+      watch: 'input tokens jump to about 6,300 for one page; the score lands near level 0.',
+      steps: [{
+        label: 'invoice-2026-4471.pdf',
+        state: 'Read the attached invoice.',
+        attach: 'pdf',
+        questions: [
+          { key: 'amount_known', type: 'noul', instructions: 'Does the document state an amount due?', expect: 'yes' },
+          { key: 'category', type: 'choice', instructions: 'What kind of document is this?', criteria: 'invoice: A bill requesting payment.\nstatement: A periodic account summary.\nreceipt: Proof a payment was made.', expect: 'invoice' },
+          { key: 'overdue_risk', type: 'score', instructions: 'How much collection risk does this invoice carry?', criteria: 'Paid on time, no risk\nLate but cooperative\nDisputed or unresponsive\nLegal action likely', expect: '0' }
+        ]
+      }]
+    },
+    {
+      id: 'ladder',
+      title: 'The context ladder on a million-token window',
+      model: 'scaledown/classify-1',
+      teaches: 'Load this, then press run ladder: eleven rungs from 10k to 1.5M chars, one card each. The 1.5M rung is where the upstream timed out.',
+      watch: 'cost rises linearly with chars, the answers hold, and the last rung comes back refused with a 504 rather than a context error.',
+      steps: [{
+        label: 'invoice text as the base',
+        state: 'Invoice 2026-4471 from North Valley Water District, amount due 4,820.00 USD, terms net 30, late fee 1.5% per month.',
+        attach: null,
+        questions: [
+          { key: 'invoice_number', type: 'noul', instructions: 'Is invoice number 2026-4471 stated in the state?', expect: 'yes' },
+          { key: 'eighteen', type: 'noul', instructions: 'Is the number 18 mentioned anywhere in the state?', expect: 'no' }
+        ]
+      }]
+    }
+  ];
+
+  function loadWalkStep() {
+    if (!walk.recipe) return;
+    var recipe = walk.recipe;
+    var step = recipe.steps[walk.step];
+    useModel(recipe.model);
+    $('state').value = step.state;
+    $('repeat').value = '1';
+    if (step.attach === 'form') setAttachment('image', formImage(), 'judicial-form.png');
+    else if (step.attach === 'pdf') setAttachment('file', simplePdf(INVOICE), 'invoice-2026-4471.pdf');
+    else clearAttachment();
+    setQuestions(step.questions);
+    info();
+    rules();
+    $('walkNav').style.display = recipe.steps.length > 1 ? 'flex' : 'none';
+    $('walkStep').textContent = 'step ' + (walk.step + 1) + ' of ' + recipe.steps.length + ' · ' + step.label;
+    $('walkNext').disabled = walk.step >= recipe.steps.length - 1;
+    $('walkNote').innerHTML = '<b style="color:#e8edf3">' + recipe.title + '</b> — ' + recipe.teaches
+      + ' <span style="color:#6f7987">Watch:</span> ' + recipe.watch;
+    $('status').textContent = recipe.title + ' loaded · ' + step.label;
+    Array.prototype.forEach.call(document.querySelectorAll('.walk'), function (el) {
+      el.classList.toggle('on', el.dataset.id === recipe.id);
+    });
+  }
+
+  function renderWalks() {
+    var box = $('walks');
+    box.textContent = '';
+    RECIPES.forEach(function (recipe) {
+      var el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'walk';
+      el.dataset.id = recipe.id;
+      var title = document.createElement('b');
+      title.textContent = recipe.title;
+      var line = document.createElement('span');
+      line.textContent = recipe.teaches;
+      el.appendChild(title);
+      el.appendChild(line);
+      el.addEventListener('click', function () {
+        walk = { recipe: recipe, step: 0 };
+        loadWalkStep();
+      });
+      box.appendChild(el);
+    });
+  }
+
+  $('walkNext').addEventListener('click', function () {
+    if (!walk.recipe) return;
+    if (walk.step < walk.recipe.steps.length - 1) {
+      walk.step += 1;
+      loadWalkStep();
+    }
+  });
+
+  renderWalks();
 
   addQuestion({ key: 'marker', type: 'noul', instructions: 'Is the exact marker ORANGE-731 present in the state?' });
   info();
