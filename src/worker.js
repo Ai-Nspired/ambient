@@ -100,9 +100,7 @@ var CLIENT = String.raw`(function () {
     '.amb-wheel .tick.on{background:var(--amb-accent);height:9px;top:1px}',
     '.amb-wheel .core{position:absolute;inset:15px;border-radius:50%;background:linear-gradient(#0a0f16,#06090e);border:1px solid #1e2734;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;text-align:center;padding:4px;cursor:pointer;font:9px/1.15 ui-monospace,SFMono-Regular,Menlo,monospace;color:#dbe3ef}',
     '.amb-wheel .core .sub{font:6.5px/1 var(--mono,ui-monospace);letter-spacing:.14em;text-transform:uppercase;color:#59616f}',
-    '.amb-wheel.held .core{border-color:var(--amb-accent)}',
     '.amb-jog-read{flex:1;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#8a93a3}',
-    '.amb-jog-read .k{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#59616f}',
     '.amb-jog-read b{color:#dbe3ef;font-weight:600}',
     '.amb-turn.amb-jogged{outline:1px solid var(--amb-accent);outline-offset:2px}',
     '@media (max-width:520px){.amb-panel{width:92vw}}',
@@ -185,7 +183,7 @@ var CLIENT = String.raw`(function () {
       '<div class="amb-files"></div>' +
       '<input type="file" multiple style="display:none">' +
       (wheels ? '<div class="amb-jogbar"><div class="amb-wheel" data-jog><div class="rotor"></div><div class="core" data-jog-core><span data-jog-detent>0</span><span class="sub">jog</span></div></div>' +
-        '<div class="amb-jog-read"><div class="k">detent</div><div data-jog-line>turn the wheel</div><div data-jog-note></div></div></div>' : '') +
+        '<div class="amb-jog-read"><div data-jog-line>turn the wheel</div><div data-jog-note></div></div></div>' : '') +
       '<div class="amb-row">' +
         '<textarea class="amb-input" rows="1" placeholder="Type, say, or attach something"></textarea>' +
       '</div>' +
@@ -390,43 +388,53 @@ var CLIENT = String.raw`(function () {
     var pulses = 0;
     var actions = ['read', 'say'];
     var action = 0;
+    // Whether he has turned the wheel at all. Until he has, nothing is selected and
+    // nothing moves: an answer arriving is not a reason to touch what he is reading.
+    var chosen = false;
     function turns() { return Array.prototype.slice.call(threadBox.querySelectorAll('.amb-turn.bot')); }
-    function paint() {
+    function pickOf(all) { return all.length ? all[detent % all.length] : null; }
+    function readout() {
       detentEl.textContent = String(detent);
       ticks.forEach(function (tick, index) { tick.classList.toggle('on', index === detent); });
       var all = turns();
-      line.innerHTML = '';
-      if (!all.length) {
+      var pick = pickOf(all);
+      line.textContent = '';
+      if (!pick) {
         line.textContent = 'no answers yet';
       } else {
-        var pick = all[detent % all.length];
         var said = (pick.getAttribute('data-said') || pick.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 46);
-        var strong = document.createElement('b');
-        strong.textContent = (detent % all.length) + 1 + '/' + all.length;
-        line.appendChild(strong);
+        var count = document.createElement('b');
+        count.textContent = (all.indexOf(pick) + 1) + '/' + all.length;
+        line.appendChild(count);
         line.appendChild(document.createTextNode(' ' + (said || '—')));
-        all.forEach(function (turn) { turn.classList.remove('amb-jogged'); });
-        pick.classList.add('amb-jogged');
-        pick.scrollIntoView({ block: 'nearest' });
       }
       note.textContent = actions[action] + ' · ' + pulses + (pulses === 1 ? ' pulse' : ' pulses');
+      if (chosen && pick) mark(pick);
+    }
+    function mark(pick) {
+      turns().forEach(function (turn) { turn.classList.toggle('amb-jogged', turn === pick); });
+    }
+    // Only the thread scrolls, and only when the chosen turn is outside its band. A
+    // scrollIntoView would move whichever ancestor it needs to, the page included.
+    function reveal(pick) {
+      var band = threadBox.getBoundingClientRect();
+      var box = pick.getBoundingClientRect();
+      if (box.top < band.top) threadBox.scrollTop -= band.top - box.top + 4;
+      else if (box.bottom > band.bottom) threadBox.scrollTop += box.bottom - band.bottom + 4;
     }
     function step(delta) {
       detent = (detent + delta + 12) % 12;
       pulses += Math.abs(delta);
+      chosen = true;
       try { if (navigator.vibrate) navigator.vibrate(8); } catch (err) {}
-      paint();
-    }
-    function selected() {
-      var all = turns();
-      return all.length ? all[detent % all.length] : null;
+      readout();
+      var pick = pickOf(turns());
+      if (pick) reveal(pick);
     }
     var drag = null;
     function angleAt(ev) {
       var box = wheel.getBoundingClientRect();
-      var dx = ev.clientX - (box.left + box.width / 2);
-      var dy = ev.clientY - (box.top + box.height / 2);
-      return Math.atan2(dy, dx) * 180 / Math.PI;
+      return Math.atan2(ev.clientY - (box.top + box.height / 2), ev.clientX - (box.left + box.width / 2)) * 180 / Math.PI;
     }
     rotor.addEventListener('pointerdown', function (ev) {
       drag = angleAt(ev);
@@ -443,28 +451,26 @@ var CLIENT = String.raw`(function () {
         drag = now;
       }
     });
-    function endDrag() { drag = null; }
-    rotor.addEventListener('pointerup', endDrag);
-    rotor.addEventListener('pointercancel', endDrag);
+    rotor.addEventListener('pointerup', function () { drag = null; });
+    rotor.addEventListener('pointercancel', function () { drag = null; });
     var hold = null;
+    var held = false;
     core.addEventListener('pointerdown', function () {
+      held = false;
       hold = setTimeout(function () {
-        action = (action + 1) % actions.length;
-        wheel.classList.add('held');
-        try { if (navigator.vibrate) navigator.vibrate([10, 30, 10]); } catch (err) {}
-        note.textContent = actions[action] + ' · held';
-        setTimeout(function () { wheel.classList.remove('held'); }, 420);
         hold = null;
+        held = true;
+        action = (action + 1) % actions.length;
+        readout();
+        try { if (navigator.vibrate) navigator.vibrate([10, 30, 10]); } catch (err) {}
       }, 520);
     });
-    function release() {
-      if (hold) { clearTimeout(hold); hold = null; }
-    }
     core.addEventListener('pointerup', function () {
-      var wasHold = hold === null;
-      release();
-      if (wasHold) return;
-      var pick = selected();
+      var wasHeld = held;
+      held = false;
+      if (hold) { clearTimeout(hold); hold = null; }
+      if (wasHeld) return;
+      var pick = pickOf(turns());
       if (!pick) return;
       var said = String(pick.getAttribute('data-said') || pick.textContent || '').trim();
       if (actions[action] === 'say') {
@@ -475,11 +481,14 @@ var CLIENT = String.raw`(function () {
       }
       try { if (navigator.vibrate) navigator.vibrate(12); } catch (err) {}
     });
-    core.addEventListener('pointerleave', release);
-    paint();
-    // A new answer changes what the wheel is walking, so the reading is repainted.
-    var observer = new MutationObserver(function () { paint(); });
-    observer.observe(threadBox, { childList: true });
+    core.addEventListener('pointercancel', function () {
+      held = false;
+      if (hold) { clearTimeout(hold); hold = null; }
+    });
+    readout();
+    // A new answer changes the count and the words, so the reading is refreshed — and
+    // nothing else: no scroll, and no outline on a turn he did not choose.
+    new MutationObserver(readout).observe(threadBox, { childList: true });
   }
 
   // Her clarify card: the options are what the answer could be, so they are offered
